@@ -1,0 +1,41 @@
+---
+description: Record tech-stack, library, strategy, and architecture decisions in docs/decisions.md
+alwaysApply: true
+---
+
+# Document Decisions
+
+Whenever a meaningful decision or trade-off is made — about the tech stack,
+libraries, strategies, or architecture — record it in [`docs/decisions.md`](../../docs/decisions.md).
+
+## When to log
+
+Log a decision when you:
+- Pick a library, framework, or tool over alternatives (e.g. `typer` vs `argparse`).
+- Choose a strategy or architecture (e.g. `src/` layout, mock-first LLM design).
+- Make a trade-off worth remembering, or reverse/supersede an earlier decision.
+
+Skip trivial, obvious choices (formatting, variable names).
+
+## How to log
+
+Append a new entry under the current phase heading. Create the phase heading if
+it doesn't exist. Use this format:
+
+```markdown
+## Phase N — <name>
+
+### <short decision title>
+- **Decision:** what was chosen.
+- **Alternatives:** what was considered and rejected.
+- **Rationale / trade-offs:** why; what we gave up.
+- **Made by:** Human | Agent | Human+Agent
+- **Date:** YYYY-MM-DD
+```
+
+## Rules
+
+- Note whether each decision was **human**, **agentic**, or collaborative.
+- Never delete past entries; if a decision changes, add a new entry that
+  references and supersedes the old one.
+- Keep entries concise — a few bullets each.

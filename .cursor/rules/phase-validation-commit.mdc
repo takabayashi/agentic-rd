@@ -1,0 +1,42 @@
+---
+description: After each phase, give the user validation steps, then commit only once they confirm
+alwaysApply: true
+---
+
+# Phase Validation & Commit
+
+When a phase from [`docs/TODO.md`](../../docs/TODO.md) is finished, do these in order.
+
+## 1. Update tracking docs
+- Tick the phase's task and acceptance-criteria boxes in `docs/TODO.md`.
+- Append any decisions/trade-offs to `docs/decisions.md` (see `document-decisions`).
+
+## 2. Hand the user validation instructions
+Give the user explicit, copy-paste commands that map to the phase's
+**Acceptance criteria**, plus what a passing result looks like. Example:
+
+```bash
+source .venv/bin/activate
+python -m podcast_agent hello   # expect: banner prints, exit 0
+pytest -q                       # expect: all tests pass
+ruff check .                    # expect: All checks passed!
+```
+
+Then ask the user to confirm validation passed (use the AskQuestion tool when
+available: e.g. "Passed — commit", "Something failed").
+
+## 3. Commit only after explicit confirmation
+- Do **not** commit until the user confirms the phase is validated.
+- If validation fails, fix the issue and return to step 2 — never commit broken work.
+- When confirmed, stage and commit with a Conventional Commit message scoped to
+  the phase, e.g.:
+
+```
+feat(phase-0): project skeleton + hello CLI
+```
+
+- Never commit secrets or `.env`. Follow the repo's git safety rules.
+
+## Notes
+- One commit per phase by default unless the user asks otherwise.
+- Do not push unless the user explicitly asks.

@@ -8,3 +8,8 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Cursor: track shared project rules, ignore machine/secret-bearing config
+.cursor/*
+!.cursor/rules/
+.cursor/mcp.json

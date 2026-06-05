@@ -1,0 +1,34 @@
+---
+description: Weigh basic architecture principles when making design decisions
+alwaysApply: true
+---
+
+# Architecture Principles
+
+When making a design/structural choice (new module, interface, where code lives,
+how components talk), evaluate it against these before deciding. Keep it
+proportionate — this is a checklist, not a mandate to abstract everything.
+
+## Check before deciding
+- **Cohesion:** each module/function has one clear responsibility and one reason
+  to change. If you'd describe it with "and", consider splitting.
+- **Loose coupling:** depend on the stable core (data models / interfaces), not
+  on concrete implementations. Dependencies should point inward and stay acyclic.
+- **Right abstraction level:** don't mix high-level orchestration with low-level
+  IO/parsing in one place. Keep each layer at a single level of detail.
+- **No leaks across boundaries:** keep presentation out of domain models, IO out
+  of pure logic, and secrets/config out of business code. (e.g. a render glyph
+  belongs in the renderer, not on the domain enum.)
+- **Open/closed where it pays off:** if a set will clearly grow (formats,
+  providers, tools), prefer a small interface/registry over branching.
+
+## Don't over-engineer
+- A deliberate **stub/mock** can be simpler than the final design — note the
+  intended seam in a comment or decision entry instead of building it early.
+- Avoid speculative interfaces for things with exactly one implementation and no
+  near-term second one.
+
+## Record it
+- When a structural choice is non-trivial, log it via the `document-decisions`
+  rule and briefly state how it scored on cohesion / coupling / abstraction (and
+  any debt deferred to a later phase).
