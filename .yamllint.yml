@@ -1,0 +1,17 @@
+# yamllint config for compose + GitHub Actions + Connect YAML (later phases).
+extends: default
+
+# Local virtualenv ships vendored YAML; never our code to lint (gitignored).
+ignore: |
+  .venv/
+
+rules:
+  # GitHub Actions uses `on:` as a key; default `truthy` flags it.
+  truthy:
+    allowed-values: ["true", "false", "on"]
+  # Compose healthcheck commands and Actions expressions get long; don't fail on it.
+  line-length: disable
+  # We don't require a leading `---` document marker.
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1

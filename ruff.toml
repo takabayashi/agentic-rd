@@ -1,0 +1,17 @@
+# Ruff config — lint + format for the Python web app.
+# Kept intentionally small; CI runs `ruff check` and `ruff format --check`.
+line-length = 100
+target-version = "py312"
+
+# Editor/venv artifacts; the image and tests live under app/.
+extend-exclude = [".venv", "app/.pytest_cache"]
+
+[lint]
+select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "W",  # pycodestyle warnings
+    "I",  # import sorting (isort)
+    "UP", # pyupgrade
+    "B",  # flake8-bugbear
+]

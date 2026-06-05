@@ -40,19 +40,19 @@ suited to AI-assisted development.
 
 > Goal: every push is linted, built, and tested automatically; a deploy path exists.
 
-- [ ] GitHub Actions workflow: checkout + `ruff` lint + format check
-- [ ] CI job: `docker compose build` (proves images build)
-- [ ] CI job: `pytest` (runs the Phase 0 health test)
-- [ ] Add `hadolint` (Dockerfile) + `yamllint` (compose/Connect YAML)
-- [ ] Deploy stub: build & push image to GHCR on tag *or* a documented manual deploy
-- [ ] **Security:** enable Dependabot; add `gitleaks` secret-scan job; set least-privilege `permissions:` on `GITHUB_TOKEN`
-- [ ] **Docs:** README "CI/CD" section + status badge; note branch-protection expectations
+- [x] GitHub Actions workflow: checkout + `ruff` lint + format check
+- [x] CI job: `docker compose build` (proves images build)
+- [x] CI job: `pytest` (runs the Phase 0 health test)
+- [x] Add `hadolint` (Dockerfile) + `yamllint` (compose/Connect YAML)
+- [x] Deploy stub: build & push image to GHCR on tag *or* a documented manual deploy
+- [x] **Security:** enable Dependabot; add `gitleaks` secret-scan job; set least-privilege `permissions:` on `GITHUB_TOKEN`
+- [x] **Docs:** README "CI/CD" section + status badge; note branch-protection expectations
 
 **Acceptance criteria**
-- [ ] Opening a PR runs all jobs and they pass (green)
+- [ ] Opening a PR runs all jobs and they pass (green) — verify on GitHub after first push
 - [ ] Lint catches a deliberately introduced style error (spot-check), then is reverted
-- [ ] `gitleaks` job runs and reports clean
-- [ ] Tagged commit produces a published image *or* deploy docs are followed successfully
+- [x] `gitleaks` job runs and reports clean — validated locally (`gitleaks detect`, no leaks)
+- [ ] Tagged commit produces a published image *or* deploy docs are followed successfully — verify after pushing a `v*` tag
 
 ## Phase 2 — Basic UI with mocked data
 
