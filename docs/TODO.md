@@ -22,19 +22,19 @@ suited to AI-assisted development.
 > Goal: a repo that starts cleanly with one command and serves a trivial page.
 > Deployable from here on.
 
-- [ ] `git init`; add `.gitignore` (`.env`, `__pycache__`, `.venv`, `.DS_Store`)
-- [ ] Create `app/main.py`: FastAPI with `GET /` → `{"status":"ok"}` and `GET /healthz` → 200
-- [ ] Add `app/requirements.txt` (fastapi, uvicorn) + `app/Dockerfile` (pinned base image)
-- [ ] Add `app/tests/test_health.py`: asserts `/healthz` returns 200 (gives CI a real test in Phase 1)
-- [ ] Write `docker-compose.yml` with just the `webapp` service on port 8080
-- [ ] **Security:** add `.env.example`; confirm `.env` is gitignored; pin all image/base tags; no secrets committed
-- [ ] **Docs:** `README.md` skeleton — one-line description + "Run" section (`docker compose up`, open `http://localhost:8080`)
+- [x] `git init`; add `.gitignore` (`.env`, `__pycache__`, `.venv`, `.DS_Store`)
+- [x] Create `app/main.py`: FastAPI with `GET /` → `{"status":"ok"}` and `GET /healthz` → 200
+- [x] Add `app/requirements.txt` (fastapi, uvicorn) + `app/Dockerfile` (pinned base image)
+- [x] Add `app/tests/test_health.py`: asserts `/healthz` returns 200 (gives CI a real test in Phase 1)
+- [x] Write `docker-compose.yml` with just the `webapp` service on port 8080
+- [x] **Security:** add `.env.example`; confirm `.env` is gitignored; pin all image/base tags; no secrets committed
+- [x] **Docs:** `README.md` skeleton — one-line description + "Run" section (`docker compose up`, open `http://localhost:8080`)
 
 **Acceptance criteria**
-- [ ] `docker compose up` starts with no errors and the webapp stays running
-- [ ] `curl localhost:8080/healthz` → HTTP 200
-- [ ] `pytest` passes locally (1 test)
-- [ ] `git status` shows `.env` ignored; no secret values in tracked files
+- [x] `docker compose up` starts with no errors and the webapp stays running
+- [x] `curl localhost:8080/healthz` → HTTP 200
+- [x] `pytest` passes locally (1 test)
+- [x] `git status` shows `.env` ignored; no secret values in tracked files
 
 ## Phase 1 — CI/CD pipeline (set up early)
 
