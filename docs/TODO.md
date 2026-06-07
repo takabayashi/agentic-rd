@@ -1,234 +1,207 @@
 # Implementation TODO — Wikipedia Edit-Triage Agent
 
-Incremental build plan derived from [`docs/requirements.md`](./requirements.md).
-Each phase is small, independently verifiable, and ends in a runnable state —
-suited to AI-assisted development.
+Incremental build plan derived from [`docs/requirements.md`](./requirements.md) and
+the take-home brief ([`docs/RedpandaTakehome.pdf`](./RedpandaTakehome.pdf)). Each
+phase is small, independently verifiable, and ends in a runnable state.
 
 **Conventions**
 - `[ ]` = not started, `[x]` = done.
-- Every phase carries **Security** and **Docs** tasks plus an explicit
+- Every phase carries lightweight **Security** and **Docs** notes plus an explicit
   **Acceptance criteria** block (each criterion is testable / observable).
 - Do one phase at a time; don't start the next until acceptance criteria pass.
 
-> **Revision notes (this pass):** split the old "LLM loop" phase into infra →
-> pass-1 → pass-2; split observability from the required write-up; added a real
-> health test in Phase 0 so the CI test job has something to run; merged
-> inseparable Connect steps; and gave every phase explicit acceptance criteria.
+**Scope discipline (why this list is short).** The brief is an explicit
+*couple-of-hours* exercise graded on judgment, not surface area: "plain but
+works", "one command brings it up", "README is short and honest". So the plan
+builds exactly the evaluated path — **ingest → transform → reason → serve** — and
+deliberately omits gold-plating (deploy automation, dependency bots, a metrics
+stack, elaborate UI). Anything cut is listed under **Out of scope** with a reason.
+
+> **Revision (this pass):** consolidated 13 phases → 10. Merged Connect ingest +
+> transform, merged Ollama infra + pass-1, folded the standalone "observability"
+> phase's *useful* parts (output retries/backoff + clean logs) into the end-to-end
+> sink phase and dropped the metrics view, trimmed UI and test scope to
+> "plain but works", and capped CI at the lightweight setup already in place
+> (no further CI/CD expansion). The required README write-up keeps its own final
+> phase because it is the most heavily graded deliverable.
 
 ---
 
-## Phase 0 — Project initialization & "Hello World"
+## Phase 0 — Project skeleton & health *(done)*
 
 > Goal: a repo that starts cleanly with one command and serves a trivial page.
-> Deployable from here on.
 
-- [x] `git init`; add `.gitignore` (`.env`, `__pycache__`, `.venv`, `.DS_Store`)
-- [x] Create `app/main.py`: FastAPI with `GET /` → `{"status":"ok"}` and `GET /healthz` → 200
-- [x] Add `app/requirements.txt` (fastapi, uvicorn) + `app/Dockerfile` (pinned base image)
-- [x] Add `app/tests/test_health.py`: asserts `/healthz` returns 200 (gives CI a real test in Phase 1)
-- [x] Write `docker-compose.yml` with just the `webapp` service on port 8080
-- [x] **Security:** add `.env.example`; confirm `.env` is gitignored; pin all image/base tags; no secrets committed
-- [x] **Docs:** `README.md` skeleton — one-line description + "Run" section (`docker compose up`, open `http://localhost:8080`)
+- [x] `git init`; `.gitignore` (`.env`, `__pycache__`, `.venv`, `.DS_Store`)
+- [x] `app/main.py`: FastAPI with `GET /` → `{"status":"ok"}` and `GET /healthz` → 200
+- [x] `app/requirements.txt` (fastapi, uvicorn) + `app/Dockerfile` (pinned base image)
+- [x] `app/tests/test_health.py`: asserts `/healthz` returns 200
+- [x] `docker-compose.yml` with the `webapp` service on port 8080
+- [x] **Security:** `.env.example`; `.env` gitignored; pinned image tags; no secrets committed
+- [x] **Docs:** `README.md` skeleton — one-line description + "Run" section
 
 **Acceptance criteria**
-- [x] `docker compose up` starts with no errors and the webapp stays running
+- [x] `docker compose up` starts cleanly and the webapp stays running
 - [x] `curl localhost:8080/healthz` → HTTP 200
-- [x] `pytest` passes locally (1 test)
-- [x] `git status` shows `.env` ignored; no secret values in tracked files
+- [x] `pytest` passes locally
+- [x] `git status` shows `.env` ignored; no secret values tracked
 
-## Phase 1 — CI/CD pipeline (set up early)
+## Phase 1 — Lightweight CI *(done; intentionally minimal)*
 
-> Goal: every push is linted, built, and tested automatically; a deploy path exists.
+> Goal: every push is linted, built, and tested so the repo stays trustworthy.
+> Deliberately capped here — CI is **not** part of the brief, so it stays small.
 
-- [x] GitHub Actions workflow: checkout + `ruff` lint + format check
-- [x] CI job: `docker compose build` (proves images build)
-- [x] CI job: `pytest` (runs the Phase 0 health test)
-- [x] Add `hadolint` (Dockerfile) + `yamllint` (compose/Connect YAML)
-- [x] Deploy stub: build & push image to GHCR on tag *or* a documented manual deploy
-- [x] **Security:** enable Dependabot; add `gitleaks` secret-scan job; set least-privilege `permissions:` on `GITHUB_TOKEN`
-- [x] **Docs:** README "CI/CD" section + status badge; note branch-protection expectations
+- [x] GitHub Actions: `ruff` lint + format check, `pytest`, `docker compose build`
+- [x] Secret-scan job (`gitleaks`) over full history; least-privilege `GITHUB_TOKEN` (`contents: read`)
+- [x] **Security:** `gitleaks` clean; no secrets in tracked files
+- [x] **Docs:** README "CI/CD" section + status badge
 
 **Acceptance criteria**
-- [ ] Opening a PR runs all jobs and they pass (green) — verify on GitHub after first push
-- [ ] Lint catches a deliberately introduced style error (spot-check), then is reverted
-- [x] `gitleaks` job runs and reports clean — validated locally (`gitleaks detect`, no leaks)
-- [ ] Tagged commit produces a published image *or* deploy docs are followed successfully — verify after pushing a `v*` tag
+- [x] `ruff check` / `ruff format --check` / `pytest` / `gitleaks detect` pass locally
+- [ ] First push to GitHub shows the workflow green *(verify once, non-blocking)*
 
-## Phase 2 — Basic UI with mocked data
+> **Capped scope:** GHCR deploy, Dependabot, branch-protection, and extra
+> Dockerfile/YAML linters are extras beyond the brief. The minimal pieces that
+> already exist are kept; **no further CI/CD work is planned** (see Out of scope).
 
-> Goal: the moderator dashboard exists and looks right, fed by hardcoded rows.
-> No DB, no pipeline yet.
+## Phase 2 — Dashboard with mocked data
 
-- [ ] Define the edit view-model (rev_id, title, editor, comment, label, confidence, escalated, size_delta, uri, event_ts, classified_at)
-- [ ] Add `MOCK_EDITS` fixture: all 4 labels + one escalated row (+ ability to render the empty state)
-- [ ] Build the Jinja2 table view: confidence, label badge, title link, Δbytes, comment, time
-- [ ] Add label filter links (`all/vandalism/substantive/trivia/unclear`), sort by confidence desc, label counts header, auto-refresh, empty-state message
-- [ ] Add `GET /api/edits?label=` returning the mock data as JSON
-- [ ] **Security:** confirm Jinja2 autoescaping is ON (title/comment are untrusted); add `rel="noopener"` to external links
-- [ ] **Docs:** add a dashboard screenshot to README; document `/api/edits` response shape
+> Goal: the moderator view exists and looks right, fed by a hardcoded fixture.
+> No DB or pipeline yet — nail the "plain but works" view first.
+
+- [x] Define the edit view-model (`rev_id, title, editor, comment, label, confidence, escalated, size_delta, uri, event_ts, classified_at`) — `app/models.py`
+- [x] `MOCK_EDITS` fixture covering all 4 labels + one escalated row + empty state (`AGENTIC_EMPTY=1`) — `app/mock_data.py`
+- [x] Jinja2 table: label badge, confidence, title link (`rel="noopener noreferrer"`), Δbytes, comment, time; sorted by confidence desc; label filter links (`all/vandalism/substantive/trivia/unclear`) with counts; 15s auto-refresh
+- [x] `GET /api/edits?label=` returning the view-model as JSON
+- [x] **Security:** confirmed Jinja2 autoescaping is ON (title/comment are untrusted attacker text); external links `rel="noopener noreferrer"`
+- [x] **Docs:** documented the `/api/edits` response shape (README "Dashboard & API")
 
 **Acceptance criteria**
-- [ ] Dashboard at `/` renders all 4 label badges and an escalated marker
-- [ ] Clicking a label filter narrows the table; rows are sorted by confidence desc
-- [ ] `/api/edits?label=vandalism` returns only vandalism rows as valid JSON
-- [ ] A `<script>` injected in a mock title renders escaped (not executed)
+- [x] `/` renders all 4 label badges + an escalated marker, sorted by confidence desc
+- [x] A label filter narrows the table
+- [x] `/api/edits?label=vandalism` returns only vandalism rows as valid JSON
+- [x] A `<script>` injected in a mock title renders escaped (not executed)
 
-## Phase 3 — Postgres + serving real (seeded) data
+## Phase 3 — Postgres: schema, seeds, real serving
 
 > Goal: the UI reads from a real store instead of mocks.
 
-- [ ] Add `postgres:16` service to compose with a healthcheck; gate `webapp` on it
-- [ ] Write `db/init.sql`: `classified_edits` (rev_id PK, label CHECK enum, confidence, escalated, timestamps, indexes)
-- [ ] Add `db/seed.sql` so the dashboard has data without the pipeline
-- [ ] Swap the app from `MOCK_EDITS` to parameterized `psycopg` queries; add a connection-not-ready fallback (503 + warm-up message)
-- [ ] **Security:** DB creds from env only; document changing the default password; parameterize all SQL (no string interpolation of inputs)
-- [ ] **Docs:** schema doc (columns + why `rev_id` is PK / UPSERT rationale); how to connect with `psql`
+- [ ] Add `postgres:16` to compose with a healthcheck; gate `webapp` on it
+- [ ] `db/init.sql`: `classified_edits` (`rev_id` PK, `label` CHECK enum, confidence, escalated, timestamps, useful index)
+- [ ] `db/seed.sql` so the dashboard has data without the pipeline
+- [ ] Swap `MOCK_EDITS` → parameterized `psycopg` queries; DB-not-ready fallback (graceful 503 warm-up, no crash)
+- [ ] **Security:** DB creds from env only; parameterize all SQL (no string interpolation); document changing the default password
+- [ ] **Docs:** schema doc (columns + why `rev_id` PK / UPSERT rationale); `psql` connect snippet
 
 **Acceptance criteria**
 - [ ] `docker compose up` brings up Postgres healthy and the app serves seeded rows
-- [ ] `/` and `/api/edits` reflect `db/seed.sql` contents
-- [ ] Stopping Postgres makes `/` return a graceful 503 warm-up page (no crash); restarting recovers
-- [ ] Inserting a row with an out-of-enum label is rejected by the CHECK constraint
+- [ ] `/` and `/api/edits` reflect `db/seed.sql`
+- [ ] Stopping Postgres yields a graceful 503 (no crash); restarting recovers
+- [ ] An out-of-enum label is rejected by the CHECK constraint
 
-## Phase 4 — Redpanda broker + Connect ingest skeleton
+## Phase 4 — Connect ingest + transform (filter, project, dedupe)
 
-> Goal: pull the real firehose and log parsed records. No transform/LLM yet.
+> Goal: pull the real firehose and turn it into a clean, deduped, model-ready
+> schema. No LLM yet — temporary `stdout` sink.
 
-- [ ] Add `redpanda` (`--mode=dev-container`) + `console` services with healthchecks
-- [ ] Add `connect` service mounting `connect/wikipedia.yaml` with `http_client` SSE input (`stream.enabled`, `lines` scanner) + `User-Agent` header
-- [ ] Parse SSE frames: strip `data:` prefix; `parse_json().catch(deleted())` to fail-closed on heartbeats; temporary `stdout` output
-- [ ] **Security:** set descriptive `WIKI_USER_AGENT` (Wikipedia 403s without it); confirm no tokens needed for this source
-- [ ] **Docs:** document the source choice, SSE quirks, and the User-Agent requirement
-
-**Acceptance criteria**
-- [ ] Connect logs show a steady stream of parsed JSON edit objects to stdout
-- [ ] Removing the User-Agent reproduces a 403 (confirming why it's required), then restored
-- [ ] Pipeline runs ≥2 min without crashing on heartbeat / non-JSON lines
-- [ ] Redpanda Console is reachable and the cluster is healthy
-
-## Phase 5 — Transform: filter, project, dedupe
-
-> Goal: turn the raw firehose into a clean, deduped, model-ready schema.
-
-- [ ] Filter before the model and project in one pass: keep `type=edit`, `bot=false`, `namespace=0`; build the clean schema incl. `size_delta`; `deleted()` the rest
+- [ ] `redpanda` (`--mode=dev-container`) + `console` services with healthchecks
+- [ ] `connect` service mounting `connect/wikipedia.yaml`: `http_client` SSE input (`stream.enabled`, `lines` scanner) with descriptive `User-Agent`
+- [ ] Parse frames: strip `data:` prefix; `parse_json().catch(deleted())` to fail-closed on heartbeats (not `if`)
+- [ ] Filter + project in one pass (root rebuilt from `this`): keep `type=edit`, `bot=false`, `namespace=0`; build clean schema incl. `size_delta = size_new - size_old`; `deleted()` the rest
 - [ ] Convert epoch → ISO for `event_ts` (TIMESTAMPTZ-safe), fallback to `meta.dt`
-- [ ] Add in-memory `cache` dedupe keyed on `rev_id`; drop on cache-add error
-- [ ] **Security:** treat title/comment as untrusted text throughout (carried as data, never executed/interpolated)
-- [ ] **Docs:** document filter rationale (cost/noise) and the dedupe strategy
+- [ ] In-memory `cache` dedupe keyed on `rev_id`; drop on cache-add error
+- [ ] **Security:** set `WIKI_USER_AGENT` (Wikipedia 403s without it); treat title/comment as untrusted data throughout
+- [ ] **Docs:** document source choice, SSE quirks, the User-Agent requirement, filter + dedupe rationale
 
 **Acceptance criteria**
-- [ ] Only main-namespace, non-bot edits appear downstream (bots/other namespaces dropped)
-- [ ] Each projected record has all schema fields; `size_delta = size_new - size_old`
-- [ ] `event_ts` is a valid ISO-8601 string (no raw epoch)
+- [ ] Connect logs a steady stream of clean projected JSON to stdout
+- [ ] Only main-namespace, non-bot `edit`s survive; each has all schema fields
+- [ ] `event_ts` is valid ISO-8601 (no raw epoch); `size_delta` correct
+- [ ] Runs ≥2 min without crashing on heartbeats / non-JSON lines
 - [ ] Emitting the same `rev_id` twice yields one downstream record
-- [ ] A trailing mapping doesn't wipe other fields (root rebuilt from `this`)
 
-## Phase 6 — LLM infrastructure (Ollama) + single-call smoke test
+## Phase 5 — LLM pass-1 classification (Ollama) + robust parse
 
-> Goal: a reachable local model and proof a single classification call works.
+> Goal: a reachable local model gives every surviving edit a normalized
+> `{label, confidence}`.
 
-- [ ] Add `ollama` service + `ollama-pull` one-shot to preload the model; gate `connect` on pull completion
-- [ ] Add a temporary single `branch` → `ollama_chat` that classifies one field; stdout the raw model output
-- [ ] Make model name + server address env-configurable (`OLLAMA_MODEL`, `OLLAMA_ADDRESS`)
-- [ ] **Security:** model runs locally (no data leaves the host); document the optional hosted-LLM path without enabling it
-- [ ] **Docs:** document model choice + how to change it; note first-run pull time
-
-**Acceptance criteria**
-- [ ] `ollama-pull` completes and the model appears in `ollama list`
-- [ ] The smoke-test branch returns a model response for a real edit (visible in stdout)
-- [ ] Changing `OLLAMA_MODEL` in `.env` swaps the model on restart
-- [ ] Connect waits for the model (no "model not found" race on cold start)
-
-## Phase 7 — Pass-1 classification + robust output parsing
-
-> Goal: every surviving edit gets a normalized `{label, confidence}`.
-
-- [ ] Replace the smoke test with a real pass-1 `branch`: `request_map` builds the prompt; `ollama_chat`; `result_map` grafts result back (don't overwrite the record)
-- [ ] Robust parse: extract first `{...}` block, fallback `{}` on parse failure, normalize label to the enum, default `unclear`, coerce confidence to a number
-- [ ] "Retries on bad output" strategy: rely on fallback-to-`unclear` + later UPSERT correction (Phase 9) instead of an in-pipeline LLM retry loop; document the why (latency/cost vs. self-correcting convergence)
-- [ ] **Security:** constrain output to the fixed enum so prompt-injection can't change behavior; result is advisory only
-- [ ] **Docs:** document the pass-1 prompt and the parse/normalize rules
+- [ ] `ollama` service + one-shot `ollama-pull` to preload the model; gate `connect` on pull completion (`OLLAMA_MODEL`, `OLLAMA_ADDRESS` env-configurable)
+- [ ] Pass-1 `branch`: `request_map` builds the prompt (title + comment + `size_delta`); `ollama_chat`; `result_map` grafts result back (don't overwrite the record)
+- [ ] Robust parse: extract first `{...}` block, fallback `{}` on failure, normalize label to the enum (`.string().trim().lowercase()` + map), default `unclear`, coerce confidence to a number
+- [ ] **Security:** constrain output to the fixed enum so prompt-injection can't change behavior; result is advisory only (no data leaves the host)
+- [ ] **Docs:** document model choice + how to change it; first-run pull time; the pass-1 prompt + parse/normalize rules
 
 **Acceptance criteria**
+- [ ] `ollama-pull` completes; model appears in `ollama list`; `connect` waits (no cold-start "model not found" race)
 - [ ] Records carry `label ∈ {vandalism,substantive,trivia,unclear}` and `confidence ∈ [0,1]`
-- [ ] A model reply with surrounding prose (dirty JSON) still parses to a valid label
-- [ ] A model reply with an out-of-enum label normalizes to `unclear`
-- [ ] A malformed/empty model reply does not crash the pipeline (defaults to `unclear`)
+- [ ] Dirty JSON (prose around `{...}`) still parses to a valid label
+- [ ] Out-of-enum label normalizes to `unclear`; malformed/empty reply defaults to `unclear` without crashing
 
-## Phase 8 — Pass-2 confidence-based escalation
+## Phase 6 — Confidence-based escalation (the multi-step loop)
 
-> Goal: a structured second pass for ambiguous items (real agent topology).
+> Goal: a structured second pass for ambiguous items — the "more than one prompt"
+> agent topology.
 
-- [ ] Add a `switch` on `confidence < CONFIDENCE_THRESHOLD || label == "unclear"` → richer escalation `branch` (more context); reuse the robust parse; set `escalated = true`
-- [ ] Make `CONFIDENCE_THRESHOLD` env-configurable
+- [ ] `switch` on `confidence < CONFIDENCE_THRESHOLD || label == "unclear"` → richer escalation `branch` (more context); reuse the robust parse; set `escalated = true`
+- [ ] `CONFIDENCE_THRESHOLD` env-configurable
+- [ ] Decide retries-on-bad-output explicitly: **fallback-to-`unclear` + later UPSERT correction** instead of an in-pipeline retry loop; document the why (latency/cost vs. self-correcting convergence)
 - [ ] **Security:** same enum-constraint + advisory-only guarantees apply to pass 2
 - [ ] **Docs:** document why two passes (cost vs. accuracy) and when escalation triggers
 
 **Acceptance criteria**
-- [ ] High-confidence pass-1 records skip the second call (`escalated = false`)
-- [ ] Low-confidence / `unclear` records trigger pass 2 and show `escalated = true`
+- [ ] High-confidence pass-1 records skip the 2nd call (`escalated = false`)
+- [ ] Low-confidence / `unclear` records trigger pass 2 (`escalated = true`)
 - [ ] Lowering `CONFIDENCE_THRESHOLD` measurably reduces escalations
-- [ ] Pass-2 output is also enum-normalized and crash-safe
+- [ ] Pass-2 output is enum-normalized and crash-safe
 
-## Phase 9 — Dual sink (topic + Postgres UPSERT) — end-to-end
+## Phase 7 — Dual sink end-to-end + connector hardening
 
-> Goal: persist results durably and stream them; remove temporary stdout.
+> Goal: persist durably and stream; make the connector production-shaped
+> (retries, batching, useful logs). Removes the temporary stdout.
 
-- [ ] `broker` fan-out output: Kafka topic `wiki.edits.classified` (key = `rev_id`)
-- [ ] Routing decision: use ONE labeled topic (`label` column) rather than topic-per-label; the confidence `switch` (Phase 8) is the routing logic. Note this explicitly so the "route" requirement is traceable
-- [ ] `sql_insert` to `classified_edits` with `ON CONFLICT (rev_id) DO UPDATE` (UPSERT); stamp `classified_at`
-- [ ] Remove the temporary `stdout` output
-- [ ] **Security:** DSN from env; explicit `sslmode`; confirm no creds in logs
-- [ ] **Docs:** document the topic, browsing it in Console, and how UPSERT corrects cold-start rows
-
-**Acceptance criteria**
-- [ ] Fresh `docker compose up` results in the dashboard filling with live classified edits
-- [ ] Messages appear on `wiki.edits.classified` in Redpanda Console (keyed by rev_id)
-- [ ] Re-processing a `rev_id` updates the existing row (no PK collision, no duplicate)
-- [ ] A row that lands `unclear` on first pass is corrected by a later UPSERT (no permanent stuck rows)
-
-## Phase 10 — Automated tests (after core features)
-
-> Goal: lock in behavior, especially the gnarly parsing/edge cases.
-
-- [ ] App unit tests: label filter, parameterized query, JSON serialization, empty + 503 states
-- [ ] Bloblang transform tests (Connect test harness): frame parse, filter, label normalization, enum-drift → `unclear`, dirty-JSON fallback, heartbeat dropped (not passed through)
-- [ ] Integration smoke test: compose subset (db + app + seed) asserts `/` and `/api/edits`
-- [ ] Wire all tests into the CI test job (replace the Phase 1 placeholder)
-- [ ] **Security:** test asserting HTML output escapes a malicious `<script>` title/comment
-- [ ] **Docs:** README "Testing" section — how to run locally and what's covered
+- [ ] `broker` fan-out: Kafka topic `wiki.edits.classified` (key = `rev_id`)
+- [ ] Routing note: ONE labeled topic (`label` column) + the confidence `switch` is the routing logic (not topic-per-label) — stated so the brief's "route" requirement is traceable
+- [ ] `sql_insert` to `classified_edits` with `ON CONFLICT (rev_id) DO UPDATE` (UPSERT); stamp `classified_at`; remove the temporary `stdout`
+- [ ] Connector hardening: retry/backoff + batching on outputs; healthcheck-gated `depends_on`; tune the Connect logger to useful, non-spammy output
+- [ ] **Security:** DSN from env; explicit `sslmode`; no creds in logs
+- [ ] **Docs:** document the topic, browsing it in Console, and how UPSERT corrects cold-start `unclear` rows
 
 **Acceptance criteria**
-- [ ] `pytest` + Connect transform tests pass locally and in CI
-- [ ] Tests cover each edge case above with at least one assertion
-- [ ] CI fails if any test fails (verified by a temporary deliberate break, then reverted)
+- [ ] Fresh `docker compose up` fills the dashboard with live classified edits
+- [ ] Messages appear on `wiki.edits.classified` (keyed by `rev_id`) in Console
+- [ ] Re-processing a `rev_id` updates the existing row (no PK collision/duplicate)
+- [ ] A first-pass `unclear` row is later corrected by an UPSERT (no permanently stuck rows)
+- [ ] Logs clearly show ingest → classify → sink without flooding; transient Postgres/Ollama downtime is retried, not fatal
 
-## Phase 11 — Observability & hardening
+## Phase 8 — Focused automated tests
 
-> Goal: useful logs and resilient startup/runtime defaults.
+> Goal: lock in the gnarly bits (parsing/edge cases) without a heavy harness.
 
-- [ ] Tune Connect logger (level/format) for useful, non-spammy logs
-- [ ] Add retry/backoff + batching on Connect outputs; healthcheck-gated `depends_on` across services
-- [ ] Add a basic metrics/counter view or `/healthz` summary (classified count, unclear rate)
-- [ ] **Security:** dependency pin audit; confirm services bind localhost-only by default
-- [ ] **Docs:** ports table + troubleshooting section in README
+- [ ] App unit tests: label filter, parameterized query, JSON serialization, empty + 503 states, and HTML-escapes-a-malicious-`<script>` title
+- [ ] Parse/normalize tests for the agent's robust-output logic: dirty-JSON → first `{...}`, enum-drift → `unclear`, heartbeat dropped (not passed through)
+- [ ] Wire tests into the CI `test` job
+- [ ] **Security:** the escaping test doubles as an XSS regression guard
+- [ ] **Docs:** README "Testing" section — how to run + what's covered
 
 **Acceptance criteria**
-- [ ] Logs clearly show ingest → classify → sink activity without flooding
-- [ ] Transient Postgres/Ollama unavailability is retried, not fatal (kill+restart test)
-- [ ] `/healthz` (or metrics view) reports a live classified count and unclear rate
+- [ ] `pytest` passes locally and in CI; each edge case above has ≥1 assertion
+- [ ] CI fails if any test fails (verify with a temporary deliberate break, then revert)
 
-## Phase 12 — Required write-up & final repro polish (deliverable)
+> Full Redpanda Connect test-harness coverage of every Bloblang mapping is
+> **optional** (listed in Out of scope) — the parse/normalize tests cover the
+> highest-risk logic at app level.
 
-> Goal: the graded README write-up and a clean one-command repro.
+## Phase 9 — Required write-up & repro polish *(deliverable)*
 
-- [ ] README **Tradeoffs** section — write up these two committed pairs (name the alternative + when you'd flip + what shaped the thinking):
-  - [ ] Pair A: **one classification call vs. multi-step reasoning loop** (we built the loop: pass-1 + confidence escalation)
+> Goal: the graded README write-up and a clean one-command repro. This is the
+> most heavily evaluated artifact — give it real time.
+
+- [ ] README **Tradeoffs** section (½–1 page) — name the alternative + when you'd flip + what shaped the thinking, for two pairs:
+  - [ ] Pair A: **one classification call vs. a multi-step reasoning loop** (we built the loop: pass-1 + confidence escalation)
   - [ ] Pair B: **Connect as the sink vs. app-side writes from a topic** (we chose Connect `sql_insert` UPSERT)
 - [ ] README **Surprises** paragraph + **"where this breaks in production"** paragraph
-- [ ] README final polish: copy-pasteable run, architecture diagram, ports table
-- [ ] **Security:** final pass — `gitleaks` clean on full history; localhost-only noted; all deps pinned
-- [ ] **Docs:** ensure `.env.example` is complete and every documented step is reproducible from a fresh clone
+- [ ] README final polish: copy-pasteable run, architecture diagram, ports table, configurable env vars
+- [ ] **Security:** final pass — `gitleaks` clean on full history; localhost-only noted; deps pinned
+- [ ] **Docs:** `.env.example` complete; every documented step reproducible from a fresh clone
 
 **Acceptance criteria**
 - [ ] A teammate following only the README reaches visible classified edits from a fresh clone
@@ -238,9 +211,18 @@ suited to AI-assisted development.
 
 ---
 
-## Out of scope (tracked, not built — see PRD)
-- [ ] Cloud/production deployment, multi-node Redpanda, managed Postgres
-- [ ] AuthN/AuthZ + multi-user accounts on the dashboard
-- [ ] Full observability stack (metrics/dashboards/alerting beyond logs)
-- [ ] Hosted LLM as default; automated moderation actions; historical backfill
-- [ ] Multi-source ingestion (HN / USGS / GitHub)
+## Out of scope (deliberately cut — see PRD)
+
+These are tracked, not built, to honor the "couple-of-hours / plain but works" brief:
+
+- **CI/CD expansion:** GHCR deploy automation, Dependabot, branch protection,
+  hadolint/yamllint jobs — the brief doesn't ask for CI; what exists is kept minimal.
+- **Observability stack:** metrics/counter view, dashboards, alerting (container
+  logs are enough); only output retries/backoff + clean logs are in (Phase 7).
+- **Full Connect test harness** for every Bloblang mapping (app-level parse tests
+  cover the risky logic instead).
+- Cloud/production deployment, multi-node Redpanda, managed Postgres, secrets manager.
+- AuthN/AuthZ + multi-user accounts on the dashboard.
+- Hosted LLM as default (local Ollama is primary; hosted left as an optional
+  `.env.example` path); automated moderation actions; historical backfill.
+- Multi-source ingestion (HN / USGS / GitHub) — single source by design.

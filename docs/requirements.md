@@ -131,9 +131,15 @@ Described from the user's perspective:
   User-Agent provided via `.env` / `docker-compose` (a `.env.example` is
   included even though the default LLM is local).
 - **Infrastructure/deployment**: runtime scoped to local Docker Compose for this
-  exercise (see Out of Scope for production/cloud deployment). Lightweight CI
-  (lint, build, tests, secret-scan) **is in scope** to keep the repo
-  trustworthy; cloud delivery/deploy automation is not.
+  exercise (see Out of Scope for production/cloud deployment). A *minimal* CI
+  (lint, build, tests, secret-scan) keeps the repo trustworthy and is kept small
+  on purpose; the brief doesn't ask for CI, so deploy automation, dependency
+  bots, and extra linters are out of scope and not expanded.
+- **Scope discipline ("plain but works")**: the brief is an explicit
+  couple-of-hours exercise graded on judgment, not surface area. Build exactly
+  the evaluated path — ingest → transform → reason → serve — with a plain,
+  functional UI; avoid gold-plating (elaborate UI, metrics stacks, deploy
+  pipelines). Every cut is recorded in Out of Scope with a reason.
 
 ---
 
@@ -220,8 +226,12 @@ future work:
 
 - **Cloud / production deployment**, autoscaling, multi-node Redpanda, managed
   Postgres, secrets manager.
+- **CI/CD expansion** beyond the minimal lint/build/test/secret-scan: image
+  publishing/deploy automation, dependency bots, branch protection, extra
+  Dockerfile/YAML linters — the brief doesn't ask for CI.
 - **AuthN/AuthZ** on the dashboard/API and multi-user accounts.
-- **Observability stack** (metrics/dashboards/alerting beyond container logs).
+- **Observability stack** (metrics/dashboards/alerting beyond container logs);
+  only output retries/backoff + useful logs are in scope.
 - **Hosted LLM** as the default (local Ollama is primary; hosted left as an
   optional config path via `.env.example`).
 - **Automated moderation actions** (reverting edits, notifications) — output is

@@ -70,3 +70,42 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** GHCR needs no extra secrets (built-in `GITHUB_TOKEN`). Tag-gating avoids publishing every commit; scoping `packages: write` to the deploy workflow keeps the PR pipeline read-only. A manual `docker push` fallback is documented for environments without tagging.
 - **Made by:** Agent
 - **Date:** 2026-06-05
+
+## Planning — Scope revalidation against the brief
+
+### Consolidate the build plan (13 phases → 10) and cap scope
+- **Decision:** Revalidated `requirements.md` + `TODO.md` against the take-home brief and trimmed for the explicit "couple-of-hours / plain but works" framing. Merged Connect ingest + transform (now Phase 4), merged Ollama infra + pass-1 classify (Phase 5), and folded the standalone "observability" phase's useful parts (output retries/backoff + clean logs) into the end-to-end dual-sink phase (Phase 7) while dropping the metrics/counter view. Trimmed UI and test scope. Kept the required README write-up as its own final phase (Phase 9) because it is the most heavily graded artifact.
+- **Alternatives:** Keep the granular 13-phase plan; cut Postgres and serve only a topic; drop the second LLM pass.
+- **Rationale / trade-offs:** The brief grades judgment and "names the cuts", not surface area, and warns against gold-plating. The consolidated plan still covers every asked deliverable (ingest → transform → reason → serve, README write-up, one-command run) and every evaluation dimension (connector fluency incl. retries/error paths, data sense, multi-step agent design, output usability, local repro, architectural reasoning). Dual sink (topic + Postgres) is kept deliberately because it directly feeds two of the brief's Tradeoffs pairs. We gave up granular per-step verifiability for a leaner, more honest plan.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Cap CI/CD at the minimal setup already in place
+- **Decision:** Treat the existing lint/test/build/secret-scan CI as sufficient and do **not** expand CI/CD. GHCR deploy (`deploy.yml`), Dependabot, branch protection, and the hadolint/yamllint jobs are reframed as extras beyond the brief (kept since already built, but not grown); recorded under Out of Scope.
+- **Alternatives:** Continue building out CI/CD (more linters, environments, release automation); or delete the already-built deploy/Dependabot config entirely.
+- **Rationale / trade-offs:** The brief never asks for CI; over-investing there spends the "couple of hours" away from the graded ingest→reason→serve path. Keeping the built pieces avoids churn/regressions; not expanding them avoids gold-plating. Deleting them was rejected as needless rework with no scoring upside. Supersedes the implied "CI is a first-class scope area" stance from the Phase 1 entries above.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Remove `deploy.yml` + `dependabot.yml` (supersedes the two entries above)
+- **Decision:** Deleted `.github/workflows/deploy.yml` (GHCR publish) and `.github/dependabot.yml`. CI is now just `ci.yml` (lint/test/build/secret-scan). Supersedes the "Deploy: publish to GHCR" entry and the "kept since already built" stance of the cap-CI entry.
+- **Alternatives:** Keep them dormant (prior decision).
+- **Rationale / trade-offs:** Human chose a leaner, brief-aligned repo footprint. The deploy/dependabot config carried maintenance surface (version bumps, token scopes) for zero scoring upside on a local-run exercise. Trade-off: a future real deployment re-adds a release workflow, but that's out of scope here.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+## Phase 2 — Dashboard with mocked data
+
+### Server-rendered Jinja2 dashboard (not a client-side SPA)
+- **Decision:** Render `/` server-side with Jinja2 templates; auto-refresh via a plain `<meta http-equiv="refresh">`. A parallel `GET /api/edits` returns JSON.
+- **Alternatives:** React/Vue SPA fetching the JSON API; HTMX partial updates; websockets/SSE push.
+- **Rationale / trade-offs:** The brief wants "plain but works" and a result a person can act on. Server rendering needs no build step, ships in the existing FastAPI image, and is trivially testable via the test client. Meta-refresh is cruder than HTMX/websockets but adequate for a seconds-fresh triage feed. The JSON endpoint keeps a clean seam for a richer UI later. Autoescaping (on by default) is load-bearing here because titles/comments are attacker-controlled.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### Pydantic `EditView` as the single view-model + `load_edits()` data seam
+- **Decision:** Define one pydantic `EditView` (+ `Label` enum) in `models.py` as the contract for both the HTML view and the JSON API; the web layer pulls data through `mock_data.load_edits()`, a thin seam Phase 3 swaps for a Postgres repository without touching routes.
+- **Alternatives:** Return raw dicts/ORM rows to the template; query the data source directly inside the route handlers.
+- **Rationale / trade-offs:** One typed contract keeps the UI, API, and (later) the DB schema in agreement and gives free, correct JSON serialization (datetimes → ISO, enum → value), pre-satisfying the pipeline's "epoch → ISO" rule at the serving edge. The `load_edits()` indirection is a deliberate, minimal seam (not a speculative repository interface) so the mock→Postgres swap is a one-module change. Cost: a little ceremony for what is still a single table.
+- **Made by:** Agent
+- **Date:** 2026-06-07
