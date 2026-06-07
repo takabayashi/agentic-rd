@@ -1,0 +1,50 @@
+"""Domain model for the triage dashboard.
+
+The view-model here is the stable contract the web layer renders and the
+`/api/edits` endpoint serializes. Data sources (the Phase 2 mock fixture, the
+Phase 3 Postgres repository) produce these objects; the web layer never sees
+raw rows. Keeping the shape in one place means the UI and the pipeline schema
+agree on exactly one definition.
+"""
+
+from datetime import datetime
+from enum import Enum
+
+from pydantic import BaseModel
+
+
+class Label(str, Enum):
+    """The fixed triage enum. The LLM output is normalized into this set so
+    model drift / prompt-injection can't introduce new labels downstream."""
+
+    vandalism = "vandalism"
+    substantive = "substantive"
+    trivia = "trivia"
+    unclear = "unclear"
+
+
+class EditView(BaseModel):
+    """One classified edit as shown on the dashboard / returned by the API."""
+
+    rev_id: int
+    title: str
+    editor: str
+    comment: str
+    label: Label
+    confidence: float
+    escalated: bool
+    size_delta: int
+    uri: str
+    event_ts: datetime
+    classified_at: datetime
+
+
+def select_edits(edits: list[EditView], label: str | None = None) -> list[EditView]:
+    """Filter by label (``None`` or ``"all"`` means no filter) and sort by
+    confidence descending. Pure function so it is trivially testable and shared
+    by both the HTML view and the JSON API."""
+
+    selected = edits
+    if label and label != "all":
+        selected = [e for e in edits if e.label.value == label]
+    return sorted(selected, key=lambda e: e.confidence, reverse=True)
