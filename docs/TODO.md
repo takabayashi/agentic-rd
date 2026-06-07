@@ -85,18 +85,18 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 
 > Goal: the UI reads from a real store instead of mocks.
 
-- [ ] Add `postgres:16` to compose with a healthcheck; gate `webapp` on it
-- [ ] `db/init.sql`: `classified_edits` (`rev_id` PK, `label` CHECK enum, confidence, escalated, timestamps, useful index)
-- [ ] `db/seed.sql` so the dashboard has data without the pipeline
-- [ ] Swap `MOCK_EDITS` → parameterized `psycopg` queries; DB-not-ready fallback (graceful 503 warm-up, no crash)
-- [ ] **Security:** DB creds from env only; parameterize all SQL (no string interpolation); document changing the default password
-- [ ] **Docs:** schema doc (columns + why `rev_id` PK / UPSERT rationale); `psql` connect snippet
+- [x] Add `postgres:16` (pinned `16.14`) to compose with a `pg_isready` healthcheck; gate `webapp` on `service_healthy`
+- [x] `db/init.sql`: `classified_edits` (`rev_id` BIGINT PK, `label` CHECK enum, confidence 0–1 CHECK, escalated, timestamps, `event_ts DESC` index)
+- [x] `db/seed.sql` (mirrors the Phase 2 fixture, idempotent `ON CONFLICT`) so the dashboard has data without the pipeline
+- [x] Swap the mock source → parameterized `psycopg` query in `app/db.py` (`get_recent_edits`); DB-not-ready fallback (graceful 503 warm-up, no crash)
+- [x] **Security:** DB creds from env only (`POSTGRES_*` / `DATABASE_URL`); SQL is parameterized (`%s`, no interpolation); default-password change documented
+- [x] **Docs:** schema doc (columns + why `rev_id` PK / UPSERT rationale); `psql` connect snippet (README "Database")
 
 **Acceptance criteria**
-- [ ] `docker compose up` brings up Postgres healthy and the app serves seeded rows
-- [ ] `/` and `/api/edits` reflect `db/seed.sql`
-- [ ] Stopping Postgres yields a graceful 503 (no crash); restarting recovers
-- [ ] An out-of-enum label is rejected by the CHECK constraint
+- [x] `docker compose up` brings up Postgres healthy and the app serves seeded rows
+- [x] `/` and `/api/edits` reflect `db/seed.sql` (5 rows; `?label=vandalism` → 1)
+- [x] Stopping Postgres yields a graceful 503 (no crash); restarting recovers (verified: 200)
+- [x] An out-of-enum label is rejected by the CHECK constraint (`classified_edits_label_check`)
 
 ## Phase 4 — Connect ingest + transform (filter, project, dedupe)
 

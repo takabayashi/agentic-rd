@@ -1,15 +1,13 @@
-"""Hardcoded edit fixture for Phase 2 (no DB, no pipeline yet).
+"""Sample edits used by the test suite.
 
-`load_edits()` is the seam the web layer depends on; Phase 3 replaces this
-module's implementation with a Postgres-backed repository without touching the
-routes. The fixture covers all four labels plus an escalated row so the UI can
-be validated end-to-end. Set ``AGENTIC_EMPTY=1`` to exercise the empty state.
+These mirror ``db/seed.sql`` and stand in for the Postgres repository so the
+unit/route tests run without a live database (see ``conftest.py``). The set
+covers all four labels plus escalated rows.
 """
 
-import os
 from datetime import UTC, datetime
 
-from models import EditView, Label
+from triage.models import EditView, Label
 
 _NOW = datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC)
 
@@ -84,9 +82,6 @@ _MOCK_EDITS: list[EditView] = [
 
 
 def load_edits() -> list[EditView]:
-    """Return the current set of classified edits. Honors ``AGENTIC_EMPTY`` so
-    the empty-state view can be demoed without code changes."""
+    """Return the sample classified edits."""
 
-    if os.getenv("AGENTIC_EMPTY") == "1":
-        return []
     return list(_MOCK_EDITS)

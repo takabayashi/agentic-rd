@@ -1,4 +1,24 @@
 services:
+  postgres:
+    image: postgres:16.14
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wiki}
+      POSTGRES_USER: ${POSTGRES_USER:-wiki}
+      # Local-only default; change it for any non-throwaway use (see README).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      # Schema + seed run once, on first init of an empty data dir.
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wiki} -d ${POSTGRES_DB:-wiki}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
   webapp:
     build:
       context: ./app
@@ -8,6 +28,12 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # Built from POSTGRES_* so .env stays optional; app reads DATABASE_URL only.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
@@ -15,3 +41,6 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+
+volumes:
+  pgdata:

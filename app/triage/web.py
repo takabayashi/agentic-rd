@@ -1,18 +1,19 @@
-"""Wikipedia Edit-Triage Agent — web app.
+"""HTTP layer for the triage dashboard: routes, view helpers, and templates.
 
-Phase 2: a moderator dashboard fed by a hardcoded fixture (`mock_data`). The
-data source is swapped for Postgres in Phase 3 without changing these routes.
+A single web module (the domain lives in `models`, data access in
+`repository`). `main.py` builds the app and includes this router.
 """
 
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from mock_data import load_edits
-from models import EditView, Label, select_edits
 
-app = FastAPI(title="Wikipedia Edit-Triage Agent", version="0.0.0")
+from .models import EditView, Label, select_edits
+from .repository import DatabaseUnavailable, get_recent_edits
+
+router = APIRouter()
 
 # Jinja2 autoescaping is ON by default for .html templates — required because
 # edit titles and comments are attacker-controllable free text.
@@ -29,9 +30,12 @@ def _label_counts(edits: list[EditView]) -> dict[str, int]:
     return counts
 
 
-@app.get("/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, label: str | None = None) -> HTMLResponse:
-    all_edits = load_edits()
+    try:
+        all_edits = get_recent_edits()
+    except DatabaseUnavailable:
+        return templates.TemplateResponse(request, "warming_up.html", status_code=503)
     active = label if label in FILTERS else "all"
     return templates.TemplateResponse(
         request,
@@ -45,17 +49,24 @@ def dashboard(request: Request, label: str | None = None) -> HTMLResponse:
     )
 
 
-@app.get("/api/edits")
-def api_edits(label: str | None = None) -> list[EditView]:
+@router.get("/api/edits")
+def api_edits(label: str | None = None):
     """Classified edits as JSON, newest-highest-confidence first.
 
     Query param ``label`` (one of all|vandalism|substantive|trivia|unclear)
-    filters the result; omitting it (or ``all``) returns everything.
+    filters the result; omitting it (or ``all``) returns everything. Returns
+    503 while the database is warming up.
     """
 
-    return select_edits(load_edits(), label)
+    try:
+        edits = get_recent_edits()
+    except DatabaseUnavailable:
+        return JSONResponse(status_code=503, content={"detail": "database warming up"})
+    return select_edits(edits, label)
 
 
-@app.get("/healthz")
+@router.get("/healthz")
 def healthz() -> JSONResponse:
+    # Liveness only — deliberately DB-independent so the app reports healthy and
+    # can serve the 503 warm-up page even before Postgres is reachable.
     return JSONResponse(status_code=200, content={"status": "healthy"})

@@ -109,3 +109,54 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** One typed contract keeps the UI, API, and (later) the DB schema in agreement and gives free, correct JSON serialization (datetimes → ISO, enum → value), pre-satisfying the pipeline's "epoch → ISO" rule at the serving edge. The `load_edits()` indirection is a deliberate, minimal seam (not a speculative repository interface) so the mock→Postgres swap is a one-module change. Cost: a little ceremony for what is still a single table.
 - **Made by:** Agent
 - **Date:** 2026-06-07
+
+## Phase 3 — Postgres: schema, seeds, real serving
+
+### psycopg 3 + `psycopg-pool` (over psycopg2 / per-request connect)
+- **Decision:** Use psycopg 3 (`psycopg[binary]`) with a lazily-opened `ConnectionPool` (`open=False`, `check=check_connection`, short timeouts) in `app/db.py`; `get_recent_edits()` is the data seam (supersedes `mock_data.load_edits` in the runtime path).
+- **Alternatives:** psycopg2; a fresh `psycopg.connect()` per request (no pool); an async driver (asyncpg) with async routes.
+- **Rationale / trade-offs:** psycopg 3 is current and ships a maintained pool. A pool fits FastAPI's threadpool (sync routes) and amortizes connection cost; `check_connection` makes it self-heal after a Postgres restart (validated). `open=False` means importing the module never connects, so tests/CI stay DB-free. The `[binary]` wheel bundles libpq, so the Dockerfile needs no system packages. Per-request connect was simpler but re-pays TCP+auth each call and still needs the same error handling; asyncpg would force async routes for little gain at this scale.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### `label` as a TEXT + CHECK constraint (not a PG ENUM type)
+- **Decision:** Store `label` as `TEXT NOT NULL CHECK (label IN (...))`.
+- **Alternatives:** A native Postgres `ENUM` type; no DB-level constraint (validate only in the app).
+- **Rationale / trade-offs:** CHECK gives the same "reject out-of-enum at the DB boundary" guarantee (validated) while keeping label changes to a one-line constraint edit instead of `ALTER TYPE ... ADD VALUE` (which has its own transactional quirks). Maps cleanly to/from the pydantic `Label` enum. Trade-off: no enumerable type in the catalog, which we don't need.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### Schema + seed via the image init-entrypoint; graceful-503 over hard dependency
+- **Decision:** Mount `db/init.sql` + `db/seed.sql` into `/docker-entrypoint-initdb.d/`; gate `webapp` on `postgres` `service_healthy`; and still wrap reads so a missing/slow DB returns a 503 warm-up page (HTML) / JSON rather than crashing. `/healthz` stays DB-independent (liveness).
+- **Alternatives:** Run migrations from the app on startup (e.g. Alembic); make the app hard-fail if the DB is down; check the DB inside `/healthz`.
+- **Rationale / trade-offs:** initdb scripts are zero-extra-tooling for a single-table schema and double as the "seeds" deliverable; the cost is they run only on an empty volume (documented `down -v` to re-seed). The healthcheck gate shrinks the cold-start window, but the 503 fallback is what actually satisfies "transient DB outage is not fatal; restarting recovers" and the later cold-start-LLM correction story. Keeping `/healthz` DB-free means the container is judged live even while it serves the warm-up page. Alembic is deferred — overkill before the schema is exercised by the pipeline.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### Restructure `app/` into a `triage/` package
+- **Decision:** Move the flat modules into a single application package: `app/triage/{__init__,main,models,repository,templates/}` with `repository.py` renamed from `db.py`; keep tests at `app/tests/` and move the mock fixture there as `sample_data.py`. Intra-package imports are relative (`from .models import ...`); tests import `from triage... import ...`. Dockerfile entrypoint becomes `uvicorn triage.main:app`.
+- **Alternatives:** Keep the flat module layout; go further with layered subpackages (`domain/`, `data/`, `web/`); promote to a repo-root `src/` layout with `pyproject.toml`.
+- **Rationale / trade-offs:** A flat folder of `main/models/db/mock_data` had no package boundary and mixed a test fixture in with production code. A single package gives one clear import root and a place for each concern (routes / domain / data access / templates) without the ceremony of layered subpackages or packaging metadata, which would be over-engineering for ~4 modules. `mock_data` moved under `tests/` because it is test/dev-only now that production reads from Postgres. Cost: a one-time import + entrypoint churn and an image rebuild.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Extract a `triage/web/` subpackage (HTTP layer) from `main.py`
+- **Decision:** Move the routes, presentation helpers, and templates into `triage/web/` (`routes.py` = `APIRouter` with `dashboard`/`api_edits`/`healthz` + the `Jinja2Templates` instance; `presentation.py` = framework-free `FILTERS` + `label_counts()`; `templates/`). `main.py` becomes a thin composition root (`FastAPI(...)` + `lifespan` + `include_router`). Tests patch `triage.web.routes.get_recent_edits`.
+- **Alternatives:** Keep routes in `main.py` (prior state); a single `web.py` module instead of a subpackage.
+- **Rationale / trade-offs:** Completes the layering so the HTTP concern is symmetric with the already-split domain (`models`) and data (`repository`) layers, and `main.py` reads as an obvious wiring root. Keeping `presentation.py` free of FastAPI imports makes the view logic unit-testable in isolation. The cost is more files for a small, feature-complete webapp (3 routes) and a moved monkeypatch target (`get_recent_edits` is now looked up in `web.routes`). Chosen over a single `web.py` for room to grow and clearer separation of pure vs. HTTP code; this was a deliberate structure choice the human asked for over the lighter option.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Collapse `triage/web/` back into a single `triage/web.py` (supersedes the entry above)
+- **Decision:** Reverted the `web/` subpackage to one `triage/web.py` module holding the `APIRouter`, the `FILTERS`/`_label_counts` view helpers, and the `Jinja2Templates` instance; templates moved back to `triage/templates/`. `main.py` is unchanged (`from .web import router`). Tests patch `triage.web.get_recent_edits`.
+- **Alternatives:** Keep the three-file `web/` subpackage (prior decision); inline everything back into `main.py`.
+- **Rationale / trade-offs:** The subpackage was over-engineering for a feature-complete 3-route webapp — three files and a `presentation.py`/`routes.py` split bought separation that a single cohesive module already provides at this size. A single `web.py` still gives the domain/data/web/compose layering (the win we wanted) with far less ceremony. This is the lighter option originally recommended before the subpackage was chosen; reverted on review. Trade-off: the framework-free `presentation` split is gone, but the view helpers are trivial and tested via the routes.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Recent-window read, filter/sort in the app
+- **Decision:** `get_recent_edits()` runs one parameterized `SELECT ... ORDER BY event_ts DESC LIMIT 200`; the existing pure `select_edits()` / `_label_counts()` then filter and sort that window in Python.
+- **Alternatives:** Push label filter + confidence sort into SQL (per-request `WHERE`/`ORDER BY`); paginate; return the whole table.
+- **Rationale / trade-offs:** Keeps SQL trivial and reuses already-tested pure helpers, bounding dashboard cost on a table the firehose will grow. Label counts stay correct because they're computed over the same fetched window. Trade-off: filtering in app means we always fetch the recent window regardless of filter; fine at a 200-row window, and easily pushed into SQL later if the window grows.
+- **Made by:** Agent
+- **Date:** 2026-06-07

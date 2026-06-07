@@ -1,10 +1,11 @@
 from datetime import UTC, datetime
 
-import main
 from fastapi.testclient import TestClient
-from models import EditView, Label, select_edits
+from triage import repository, web
+from triage.main import app
+from triage.models import EditView, Label, select_edits
 
-client = TestClient(main.app)
+client = TestClient(app)
 
 _TS = datetime(2026, 6, 7, 12, 0, 0, tzinfo=UTC)
 
@@ -82,13 +83,31 @@ def test_dashboard_renders_all_labels_and_escalation():
 
 def test_dashboard_escapes_malicious_title(monkeypatch):
     evil = _edit(999, Label.vandalism, 0.5, title="<script>alert('xss')</script>")
-    monkeypatch.setattr(main, "load_edits", lambda: [evil])
+    monkeypatch.setattr(web, "get_recent_edits", lambda *a, **k: [evil])
     html = client.get("/").text
     assert "<script>alert('xss')</script>" not in html
     assert "&lt;script&gt;" in html
 
 
 def test_dashboard_empty_state(monkeypatch):
-    monkeypatch.setattr(main, "load_edits", lambda: [])
+    monkeypatch.setattr(web, "get_recent_edits", lambda *a, **k: [])
     html = client.get("/").text
     assert "No edits to show" in html
+
+
+def _raise_db_unavailable(*a, **k):
+    raise repository.DatabaseUnavailable("down")
+
+
+def test_dashboard_db_unavailable_returns_503(monkeypatch):
+    monkeypatch.setattr(web, "get_recent_edits", _raise_db_unavailable)
+    response = client.get("/")
+    assert response.status_code == 503
+    assert "warming up" in response.text.lower()
+
+
+def test_api_edits_db_unavailable_returns_503(monkeypatch):
+    monkeypatch.setattr(web, "get_recent_edits", _raise_db_unavailable)
+    response = client.get("/api/edits")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "database warming up"}

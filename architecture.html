@@ -210,12 +210,13 @@
 
   <section id="files">
     <h2><span class="num">1</span> Project file structure</h2>
-    <p class="desc">Actual repository layout. The app is a single FastAPI module today; pipeline/db/connect directories arrive in later phases.</p>
+    <p class="desc">Actual repository layout. The web app is a <code>triage/</code> package serving from Postgres (<code>db/</code>); the Connect pipeline directory arrives in later phases.</p>
     <div class="diagram">
       <pre class="mermaid">
 flowchart TD
   root["agentic-rd/"]
   root --> app["app/ (webapp)"]
+  root --> db["db/ (init.sql + seed.sql)"]
   root --> docs["docs/"]
   root --> gh[".github/"]
   root --> compose["docker-compose.yml"]
@@ -223,22 +224,25 @@ flowchart TD
   root --> readme["README.md"]
   root --> ruff["ruff.toml"]
 
-  app --> main["main.py — FastAPI app"]
+  app --> pkg["triage/ (package)"]
   app --> reqs["requirements.txt"]
   app --> docker["Dockerfile (python:3.12.13-slim)"]
-  app --> tests["tests/test_health.py"]
+  app --> tests["tests/ (pytest + sample_data)"]
+  pkg --> main["main.py — compose root"]
+  pkg --> models["models.py — EditView, Label"]
+  pkg --> repo["repository.py — Postgres access"]
+  pkg --> web["web.py — HTTP layer (router + view helpers)"]
+  pkg --> tmpl["templates/ — dashboard, warming_up"]
 
   docs --> prd["requirements.md (PRD)"]
-  docs --> todo["TODO.md (12 phases)"]
+  docs --> todo["TODO.md (10 phases)"]
   docs --> dec["decisions.md"]
   docs --> pdf["RedpandaTakehome.pdf"]
 
   gh --> ci["workflows/ci.yml"]
-  gh --> dep["workflows/deploy.yml"]
-  gh --> bot["dependabot.yml"]
 
   classDef done fill:#1a7f3722,stroke:#1a7f37,color:#1a7f37;
-  class app,main,reqs,docker,tests,compose,env,readme,ruff,gh,ci,dep,bot,docs,prd,todo,dec done;
+  class app,pkg,main,models,repo,web,tmpl,reqs,docker,tests,db,compose,env,readme,ruff,gh,ci,docs,prd,todo,dec done;
       </pre>
     </div>
   </section>
