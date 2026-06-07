@@ -15,3 +15,8 @@ select = [
     "UP", # pyupgrade
     "B",  # flake8-bugbear
 ]
+
+[lint.per-file-ignores]
+# render.py is mostly embedded CSS/HTML string literals where wrapping lines to
+# 100 cols would hurt readability rather than help.
+"app/triage/render.py" = ["E501"]

@@ -1,23 +1,17 @@
-"""HTTP layer for the triage dashboard: routes, view helpers, and templates.
+"""HTTP layer for the triage dashboard: routes and view helpers.
 
-A single web module (the domain lives in `models`, data access in
-`repository`). `main.py` builds the app and includes this router.
+A single web module (the domain lives in `models`, data access in `repository`,
+HTML rendering in `render`). `main.py` builds the app and includes this router.
 """
 
-from pathlib import Path
-
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
 
 from .models import EditView, Label, select_edits
+from .render import render_dashboard, render_warming_up
 from .repository import DatabaseUnavailable, get_recent_edits
 
 router = APIRouter()
-
-# Jinja2 autoescaping is ON by default for .html templates — required because
-# edit titles and comments are attacker-controllable free text.
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 # Filter chips: "all" plus every label in the enum (single source of truth).
 FILTERS: list[str] = ["all", *[label.value for label in Label]]
@@ -31,21 +25,19 @@ def _label_counts(edits: list[EditView]) -> dict[str, int]:
 
 
 @router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, label: str | None = None) -> HTMLResponse:
+def dashboard(label: str | None = None) -> HTMLResponse:
     try:
         all_edits = get_recent_edits()
     except DatabaseUnavailable:
-        return templates.TemplateResponse(request, "warming_up.html", status_code=503)
+        return HTMLResponse(render_warming_up(), status_code=503)
     active = label if label in FILTERS else "all"
-    return templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        {
-            "edits": select_edits(all_edits, active),
-            "filters": FILTERS,
-            "counts": _label_counts(all_edits),
-            "active": active,
-        },
+    return HTMLResponse(
+        render_dashboard(
+            edits=select_edits(all_edits, active),
+            filters=FILTERS,
+            counts=_label_counts(all_edits),
+            active=active,
+        )
     )
 
 

@@ -232,7 +232,7 @@ flowchart TD
   pkg --> models["models.py — EditView, Label"]
   pkg --> repo["repository.py — Postgres access"]
   pkg --> web["web.py — HTTP layer (router + view helpers)"]
-  pkg --> tmpl["templates/ — dashboard, warming_up"]
+  pkg --> render["render.py — plain-Python HTML"]
 
   docs --> prd["requirements.md (PRD)"]
   docs --> todo["TODO.md (10 phases)"]
@@ -242,7 +242,7 @@ flowchart TD
   gh --> ci["workflows/ci.yml"]
 
   classDef done fill:#1a7f3722,stroke:#1a7f37,color:#1a7f37;
-  class app,pkg,main,models,repo,web,tmpl,reqs,docker,tests,db,compose,env,readme,ruff,gh,ci,docs,prd,todo,dec done;
+  class app,pkg,main,models,repo,web,render,reqs,docker,tests,db,compose,env,readme,ruff,gh,ci,docs,prd,todo,dec done;
       </pre>
     </div>
   </section>

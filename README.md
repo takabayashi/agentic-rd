@@ -34,8 +34,10 @@ page that auto-retries — the app never crashes on a cold or transient DB.
 
 - `GET /` — HTML dashboard: a table of classified edits sorted by confidence
   descending, with label-filter chips (`all/vandalism/substantive/trivia/unclear`)
-  and a 15-second auto-refresh. Untrusted fields (title, comment) are
-  HTML-escaped; external diff links carry `rel="noopener noreferrer"`.
+  and a 15-second auto-refresh. The page is rendered in plain Python (no
+  template engine); untrusted fields (title, comment, editor) are escaped with
+  `html.escape`, diff links are emitted only for `http(s)` URIs and carry
+  `rel="noopener noreferrer"`.
 - `GET /api/edits?label=<label>` — the same data as JSON, newest-highest-
   confidence first. Omitting `label` (or `all`) returns everything. Each row:
 
@@ -104,7 +106,7 @@ app/
     models.py        # EditView + Label enum + select_edits()  (domain)
     repository.py    # Postgres access: get_recent_edits, DatabaseUnavailable  (data)
     web.py           # HTTP layer: APIRouter (dashboard, /api/edits, /healthz) + view helpers
-    templates/       # dashboard.html, warming_up.html
+    render.py        # plain-Python HTML rendering (html.escape on untrusted fields)
   tests/             # pytest suite + sample_data fixture
   Dockerfile
   requirements.txt

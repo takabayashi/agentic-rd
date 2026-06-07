@@ -147,6 +147,13 @@ entries reference the ones they replace).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-07
 
+### Drop Jinja2 for plain-Python HTML rendering (`render.py`)
+- **Decision:** Remove the `jinja2` dependency and the `templates/` files; render the dashboard and warm-up page from `triage/render.py` using f-strings, escaping every untrusted field with stdlib `html.escape(..., quote=True)` and only emitting diff links for `http(s)` URIs. `web.py` returns `HTMLResponse(render_...())`.
+- **Alternatives:** Keep Jinja2 (autoescaping + template separation); a small HTML-builder lib (`htpy`/`dominate`); a Python UI framework (Streamlit/NiceGUI).
+- **Rationale / trade-offs:** For a single table + a warm-up page, a template engine is more machinery than the job needs; dropping it removes a dependency and two files with no feature loss, keeping the FastAPI app, JSON API, `/healthz`, and `TestClient` tests intact. The real risk — XSS via attacker-controlled title/comment — is handled explicitly with `html.escape` (one `_esc` helper, asserted by the existing escaping test) plus an http-only href guard. Streamlit/NiceGUI were rejected as the opposite of the goal: heavyweight dependency trees and a second server runtime that would replace the working FastAPI serving layer; `htpy` was rejected as swapping one dependency for another. Trade-off: we now hand-escape rather than rely on autoescaping, mitigated by funnelling all interpolation through `_esc` and the regression test.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
 ### Collapse `triage/web/` back into a single `triage/web.py` (supersedes the entry above)
 - **Decision:** Reverted the `web/` subpackage to one `triage/web.py` module holding the `APIRouter`, the `FILTERS`/`_label_counts` view helpers, and the `Jinja2Templates` instance; templates moved back to `triage/templates/`. `main.py` is unchanged (`from .web import router`). Tests patch `triage.web.get_recent_edits`.
 - **Alternatives:** Keep the three-file `web/` subpackage (prior decision); inline everything back into `main.py`.
