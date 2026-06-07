@@ -145,12 +145,13 @@ How it works:
   volume.
 - **Change the model.** Set `OLLAMA_MODEL` (any Ollama model name) in `.env`; it
   is pulled automatically. `OLLAMA_ADDRESS` points Connect at the server.
-- **Memory.** The model is loaded entirely in RAM inside the Docker VM, so the
-  VM needs more memory than the model size: `llama3.2` (~2 GB) needs roughly
-  **4 GB+** allocated to Docker. Docker Desktop defaults are usually fine; with
-  Colima, start it with headroom, e.g. `colima start --memory 8`. Too little
-  memory makes Ollama crash on first inference — drop to a smaller `OLLAMA_MODEL`
-  (e.g. `llama3.2:1b`) or raise the VM memory.
+- **Memory vs. quality.** The model loads entirely in RAM inside the Docker VM,
+  so the VM needs more memory than the model size: `llama3.2` (~2 GB) wants
+  roughly **4 GB+** allocated to Docker (Docker Desktop defaults are fine; with
+  Colima use `colima start --memory 4` or more). On a tightly constrained VM you
+  can drop to a **low-memory fallback** — `qwen2.5:1.5b` (~1 GB) or `qwen2.5:0.5b`
+  (~0.4 GB) — but these classify noticeably worse (they over-label `vandalism`),
+  so prefer `llama3.2` whenever the memory is available.
 - **Apple Silicon / Colima → use host Ollama.** Docker can't pass through the Mac
   GPU, so the containerized Ollama runs CPU-only, and on an arm64 Colima VM the
   `ollama/ollama` image can crash during inference (a virtualization/cgo issue,
