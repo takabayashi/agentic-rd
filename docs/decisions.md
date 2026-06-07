@@ -190,3 +190,33 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** The recentchange firehose is *all* projects; validating live showed it dominated by Wikidata `Q`-item / `wbsetclaim` edits and many non-English wikis, which are meaningless to a `vandalism|substantive|trivia` classifier — scoping to English Wikipedia is "filter before the model / data sense" and keeps later LLM volume bounded and relevant. The `.int64()` casts fix a real bug found in validation: JSON numbers are float64, so `.string()` rendered `rev_id` in scientific notation (`diff=1.35e+09`), breaking diff URLs. Formatting the epoch demonstrates the documented TIMESTAMPTZ gotcha while `meta.dt` is the safety net. Trade-off: English-only narrows the demo to one wiki by design (multi-wiki is out of scope).
 - **Made by:** Agent
 - **Date:** 2026-06-07
+
+## Phase 5 — LLM pass-1 classification (Ollama)
+
+### Containerized Ollama + one-shot model pull gating Connect
+- **Decision:** Run Ollama as its own compose service (pinned `ollama/ollama:0.30.6`) with a persistent `ollama` volume, plus a one-shot `ollama-pull` job that preloads `OLLAMA_MODEL`; `connect` waits on it via `depends_on: { condition: service_completed_successfully }`. `OLLAMA_ADDRESS`/`OLLAMA_MODEL` are env-configurable.
+- **Alternatives:** Let Connect's `ollama_chat` start/manage its own embedded Ollama (no `server_address`); run Ollama natively on the host and point Connect at `host.docker.internal`; pull the model lazily on first request.
+- **Rationale / trade-offs:** A dedicated service keeps the model cache in a named volume (no re-download across restarts) and a separate pull job means the model is guaranteed resident before Connect's first call — closing the cold-start "model not found" race the acceptance criteria call out, without Connect managing a model lifecycle. The env-configurable `OLLAMA_ADDRESS` doubles as the macOS escape hatch (host Ollama for GPU) while the default preserves one-command `docker compose up`. Trade-off: containerized Ollama is CPU-only under Docker Desktop on macOS (slower); accepted because the default must be self-contained, and the host override is documented.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### Model: `llama3.2` (small, local, configurable)
+- **Decision:** Default to `llama3.2` (~3B / ~2 GB) as the classification model.
+- **Alternatives:** Larger local models (`llama3.1:8b`, `qwen2`), tiny models (`phi3`, `gemma2:2b`), or a hosted API.
+- **Rationale / trade-offs:** A small instruct model is enough for a 4-way label + confidence on short title/comment inputs, keeps the first-run pull and per-edit latency bounded (matters most on CPU-only macOS), and stays fully local (no data leaves the host, no keys). Fully swappable via `OLLAMA_MODEL`. Trade-off: a small model is more likely to drift outside the enum or mis-rank confidence — mitigated by the robust parse + enum normalization and the Phase 6 escalation pass.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### Keep containerized Ollama as default; host-Ollama override for arm64 Colima (+ `extra_hosts`)
+- **Decision:** Keep the in-container `ollama` service as the `docker compose up` default, and make the host-Ollama escape hatch first-class: the `connect` service maps `host.docker.internal:host-gateway` so setting `OLLAMA_ADDRESS=http://host.docker.internal:11434` routes classification to a host-native Ollama.
+- **Alternatives:** Make host-Ollama the default (drop the container); pin an older Ollama image; force the container CPU path (`OLLAMA_VULKAN=false`).
+- **Rationale / trade-offs:** Live validation surfaced that the `ollama/ollama` image crashes during inference on this host's arm64 Colima VM — `0.30.6` dies with `fatal error: found bad pointer in Go heap (cgo)` and `0.24.0` with `runtime: out of memory` despite ~7.5 GiB free — a Virtualization.framework/cgo incompatibility, not a pipeline bug. The pipeline was validated end-to-end against host-native Ollama (~4.5 s/inference) and the robust parse against crafted dirty/out-of-enum/clamp inputs. The containerized default is still correct for the brief's "one command" on platforms where it works (Docker Desktop, Linux CI); making host-Ollama the default would break self-containment there. Pinning an older image was rejected (both tested versions crash here) and forcing the CPU path didn't help; `extra_hosts` makes the documented override work uniformly (including Linux, where `host.docker.internal` isn't automatic) at zero cost.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### Robust parse: `re_find_all` first-`{...}` + enum normalization (not trusting `response_format: json`)
+- **Decision:** In the `branch` `result_map`, extract the first `{...}` block with `re_find_all("(?s)\{.*\}").index(0).or("{}")`, `parse_json().catch({})`, normalize `label` with `.string().trim().lowercase()` against the fixed enum (unknown/empty → `unclear`), and coerce `confidence` to a number clamped to `[0,1]`. Pass-1 keeps the temporary `stdout` sink. Prompt input is built in `request_map` (title + comment + `size_delta`) and grafted back without overwriting the record.
+- **Alternatives:** Trust `ollama_chat`'s `response_format: json` and `parse_json()` the whole reply directly; retry the model on bad output; raise/drop on parse failure.
+- **Rationale / trade-offs:** Even with JSON mode, small models leak prose, code fences, or extra keys, so extracting the first object + defaulting is what actually satisfies the "dirty JSON still parses / malformed defaults to `unclear` without crashing" criteria. Enum normalization makes label drift safe and doubles as the prompt-injection guardrail (output can only ever be one of four values). Confidence coercion/clamp guarantees `[0,1]` for the DB CHECK and the dashboard sort. We chose fallback-to-`unclear` over an in-pipeline retry loop (latency/cost on a firehose; later UPSERT correction is cheaper) — the broader retry decision is recorded again in Phase 6/7. Note: `re_find` does not exist in Bloblang (caught by `connect lint`); `re_find_all(...).index(0)` is the supported form.
+- **Made by:** Agent
+- **Date:** 2026-06-07

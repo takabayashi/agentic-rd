@@ -126,17 +126,25 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > Goal: a reachable local model gives every surviving edit a normalized
 > `{label, confidence}`.
 
-- [ ] `ollama` service + one-shot `ollama-pull` to preload the model; gate `connect` on pull completion (`OLLAMA_MODEL`, `OLLAMA_ADDRESS` env-configurable)
-- [ ] Pass-1 `branch`: `request_map` builds the prompt (title + comment + `size_delta`); `ollama_chat`; `result_map` grafts result back (don't overwrite the record)
-- [ ] Robust parse: extract first `{...}` block, fallback `{}` on failure, normalize label to the enum (`.string().trim().lowercase()` + map), default `unclear`, coerce confidence to a number
-- [ ] **Security:** constrain output to the fixed enum so prompt-injection can't change behavior; result is advisory only (no data leaves the host)
-- [ ] **Docs:** document model choice + how to change it; first-run pull time; the pass-1 prompt + parse/normalize rules
+- [x] `ollama` service + one-shot `ollama-pull` to preload the model; gate `connect` on pull completion (`OLLAMA_MODEL`, `OLLAMA_ADDRESS` env-configurable)
+- [x] Pass-1 `branch`: `request_map` builds the prompt (title + comment + `size_delta`); `ollama_chat`; `result_map` grafts result back (don't overwrite the record)
+- [x] Robust parse: extract first `{...}` block, fallback `{}` on failure, normalize label to the enum (`.string().trim().lowercase()` + map), default `unclear`, coerce confidence to a number
+- [x] **Security:** constrain output to the fixed enum so prompt-injection can't change behavior; result is advisory only (no data leaves the host)
+- [x] **Docs:** document model choice + how to change it; first-run pull time; the pass-1 prompt + parse/normalize rules
 
 **Acceptance criteria**
-- [ ] `ollama-pull` completes; model appears in `ollama list`; `connect` waits (no cold-start "model not found" race)
-- [ ] Records carry `label ∈ {vandalism,substantive,trivia,unclear}` and `confidence ∈ [0,1]`
-- [ ] Dirty JSON (prose around `{...}`) still parses to a valid label
-- [ ] Out-of-enum label normalizes to `unclear`; malformed/empty reply defaults to `unclear` without crashing
+- [x] `ollama-pull` completes; model appears in `ollama list`; `connect` waits (no cold-start "model not found" race)
+- [x] Records carry `label ∈ {vandalism,substantive,trivia,unclear}` and `confidence ∈ [0,1]` (validated live: e.g. "We use miles in the UK not KM" → vandalism, infobox fixes → substantive)
+- [x] Dirty JSON (prose around `{...}`) still parses to a valid label (validated: prose-wrapped `{...}` → `vandalism`)
+- [x] Out-of-enum label normalizes to `unclear`; malformed/empty reply defaults to `unclear` without crashing (validated: `spam`→`unclear`, non-JSON→`unclear`/0, confidence 5→1, -2→0)
+
+> **Validation note (env-specific):** the in-container `ollama/ollama` image
+> crashes during inference on this host's arm64 Colima VM (native/cgo `fatal
+> error: found bad pointer in Go heap`; older `0.24.0` OOM-crashes too) — a
+> Colima VZ incompatibility, not a pipeline bug. Validated end-to-end against a
+> **host-native Ollama** via `OLLAMA_ADDRESS=http://host.docker.internal:11434`
+> (~4.5s/inference). The containerized default is kept for portability (Docker
+> Desktop / Linux runners), with the host override documented in the README.
 
 ## Phase 6 — Confidence-based escalation (the multi-step loop)
 

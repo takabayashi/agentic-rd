@@ -42,6 +42,32 @@ services:
       retries: 5
       start_period: 5s
 
+  ollama:
+    image: ollama/ollama:0.30.6
+    volumes:
+      # Persist pulled models so they survive restarts (avoids re-download).
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot: preload the model so Connect never races a cold "model not found".
+  ollama-pull:
+    image: ollama/ollama:0.30.6
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: ${OLLAMA_ADDRESS:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull \"$$OLLAMA_MODEL\""]
+    restart: "no"
+
   connect:
     image: docker.redpanda.com/redpandadata/connect:4.95.0
     command: run /connect/wikipedia.yaml
@@ -50,7 +76,17 @@ services:
     environment:
       # Wikipedia 403s without a descriptive User-Agent (see .env.example).
       WIKI_USER_AGENT: ${WIKI_USER_AGENT:-agentic-rd/0.1 (https://github.com/takabayashi/agentic-rd)}
+      OLLAMA_ADDRESS: ${OLLAMA_ADDRESS:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+    # Lets the documented host-Ollama override resolve everywhere (set
+    # OLLAMA_ADDRESS=http://host.docker.internal:11434 to use a host GPU).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
   pgdata:
+  ollama:

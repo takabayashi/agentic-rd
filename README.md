@@ -7,10 +7,11 @@ triages each edit with a multi-step LLM reasoning loop (Redpanda Connect +
 Ollama), and serves the results on a live dashboard. Built for the Redpanda
 Field Deployed Engineer build exercise.
 
-> Status: **Phase 4** — a Redpanda Connect pipeline ingests and transforms the
-> live Wikipedia firehose (currently to stdout); the dashboard still serves
-> seeded Postgres rows. The LLM loop and the topic/UPSERT sink land in later
-> phases (see [`docs/TODO.md`](docs/TODO.md)).
+> Status: **Phase 5** — a Redpanda Connect pipeline ingests and transforms the
+> live Wikipedia firehose and classifies each surviving edit with a local Ollama
+> model (pass-1 `{label, confidence}`), currently to stdout; the dashboard still
+> serves seeded Postgres rows. The confidence-based escalation pass and the
+> topic/UPSERT sink land in later phases (see [`docs/TODO.md`](docs/TODO.md)).
 
 ## Run
 
@@ -119,10 +120,66 @@ Key choices:
   event_ts`; `size_delta = length.new - length.old`; the epoch `timestamp` is
   formatted to an ISO-8601 string (TIMESTAMPTZ-safe), falling back to `meta.dt`.
 
-Phase 4 sinks to **stdout** only; the topic + Postgres UPSERT sink arrives with
-the LLM phases. Dedup is deferred to the Postgres `rev_id` UPSERT (an SSE stream
-rarely re-sends a `rev_id`; reconnect replays are absorbed by the UPSERT), so no
-in-pipeline cache is needed.
+The pipeline currently sinks to **stdout** only; the topic + Postgres UPSERT
+sink arrives in Phase 7. Dedup is deferred to the Postgres `rev_id` UPSERT (an
+SSE stream rarely re-sends a `rev_id`; reconnect replays are absorbed by the
+UPSERT), so no in-pipeline cache is needed.
+
+## Classification (pass 1)
+
+Each surviving edit is classified by a **local Ollama model** through a Connect
+`branch` (in [`connect/wikipedia.yaml`](connect/wikipedia.yaml)). The dashboard
+isn't wired to these results yet (that's the Phase 7 sink) — watch them on stdout:
+
+```bash
+docker compose logs -f connect   # each JSON line now carries label + confidence
+```
+
+How it works:
+
+- **Local LLM via Ollama.** A pinned `ollama` service serves the model; a
+  one-shot `ollama-pull` preloads it on startup, and `connect` waits for that to
+  complete (`service_completed_successfully`) so there's no cold-start "model not
+  found" race. First run downloads the model (`llama3.2`, ~2 GB), so the initial
+  `docker compose up` takes a few minutes; later runs reuse the cached `ollama`
+  volume.
+- **Change the model.** Set `OLLAMA_MODEL` (any Ollama model name) in `.env`; it
+  is pulled automatically. `OLLAMA_ADDRESS` points Connect at the server.
+- **Memory.** The model is loaded entirely in RAM inside the Docker VM, so the
+  VM needs more memory than the model size: `llama3.2` (~2 GB) needs roughly
+  **4 GB+** allocated to Docker. Docker Desktop defaults are usually fine; with
+  Colima, start it with headroom, e.g. `colima start --memory 8`. Too little
+  memory makes Ollama crash on first inference — drop to a smaller `OLLAMA_MODEL`
+  (e.g. `llama3.2:1b`) or raise the VM memory.
+- **Apple Silicon / Colima → use host Ollama.** Docker can't pass through the Mac
+  GPU, so the containerized Ollama runs CPU-only, and on an arm64 Colima VM the
+  `ollama/ollama` image can crash during inference (a virtualization/cgo issue,
+  not a pipeline bug). The reliable, fast path on a Mac is to run Ollama natively
+  on the host and point Connect at it:
+
+```bash
+brew install ollama && ollama serve   # native, GPU-accelerated
+ollama pull llama3.2
+OLLAMA_ADDRESS=http://host.docker.internal:11434 docker compose up
+```
+
+  The `connect` service already maps `host.docker.internal`, so only
+  `OLLAMA_ADDRESS` needs to change. The containerized Ollama remains the default
+  so `docker compose up` is self-contained on platforms that support it (Docker
+  Desktop, Linux).
+- **`branch` keeps the record intact.** `request_map` sends only the fields that
+  inform a label (title, comment, `size_delta`); `ollama_chat` returns JSON
+  (`response_format: json`, `temperature: 0`); `result_map` grafts `{label,
+  confidence}` back onto the original record rather than overwriting it.
+- **Robust, crash-safe parse.** We extract the first `{...}` block from the model
+  reply (handles any prose around it), fall back to `{}` on failure, normalize
+  the label (`trim().lowercase()`) to the enum — anything unknown or empty
+  becomes `unclear` — and coerce `confidence` to a number clamped to `[0,1]`. A
+  malformed or empty reply yields a valid `unclear` row instead of crashing.
+- **Security.** Output is constrained to the fixed enum
+  (`vandalism|substantive|trivia|unclear`), so prompt-injection in the
+  attacker-controlled title/comment can't change system behavior; the
+  classification is advisory only and nothing leaves the host.
 
 ## Develop / test
 
