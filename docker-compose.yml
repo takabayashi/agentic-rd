@@ -42,5 +42,15 @@ services:
       retries: 5
       start_period: 5s
 
+  connect:
+    image: docker.redpanda.com/redpandadata/connect:4.95.0
+    command: run /connect/wikipedia.yaml
+    volumes:
+      - ./connect/wikipedia.yaml:/connect/wikipedia.yaml:ro
+    environment:
+      # Wikipedia 403s without a descriptive User-Agent (see .env.example).
+      WIKI_USER_AGENT: ${WIKI_USER_AGENT:-agentic-rd/0.1 (https://github.com/takabayashi/agentic-rd)}
+    restart: unless-stopped
+
 volumes:
   pgdata:

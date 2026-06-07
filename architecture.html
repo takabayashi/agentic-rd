@@ -217,6 +217,7 @@ flowchart TD
   root["agentic-rd/"]
   root --> app["app/ (webapp)"]
   root --> db["db/ (init.sql + seed.sql)"]
+  root --> connect["connect/ (wikipedia.yaml — Connect pipeline)"]
   root --> docs["docs/"]
   root --> gh[".github/"]
   root --> compose["docker-compose.yml"]
@@ -242,7 +243,7 @@ flowchart TD
   gh --> ci["workflows/ci.yml"]
 
   classDef done fill:#1a7f3722,stroke:#1a7f37,color:#1a7f37;
-  class app,pkg,main,models,repo,web,render,reqs,docker,tests,db,compose,env,readme,ruff,gh,ci,docs,prd,todo,dec done;
+  class app,pkg,main,models,repo,web,render,reqs,docker,tests,db,connect,compose,env,readme,ruff,gh,ci,docs,prd,todo,dec done;
       </pre>
     </div>
   </section>

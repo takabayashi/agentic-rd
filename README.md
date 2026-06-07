@@ -7,9 +7,10 @@ triages each edit with a multi-step LLM reasoning loop (Redpanda Connect +
 Ollama), and serves the results on a live dashboard. Built for the Redpanda
 Field Deployed Engineer build exercise.
 
-> Status: **Phase 3** — the dashboard reads classified edits from Postgres
-> (seeded sample rows for now). Ingest, transform, and the LLM loop land in
-> later phases (see [`docs/TODO.md`](docs/TODO.md)).
+> Status: **Phase 4** — a Redpanda Connect pipeline ingests and transforms the
+> live Wikipedia firehose (currently to stdout); the dashboard still serves
+> seeded Postgres rows. The LLM loop and the topic/UPSERT sink land in later
+> phases (see [`docs/TODO.md`](docs/TODO.md)).
 
 ## Run
 
@@ -17,9 +18,9 @@ Field Deployed Engineer build exercise.
 docker compose up
 ```
 
-This starts Postgres (schema + seed applied automatically on first run) and the
-web app. Open <http://localhost:8080> to see the triage dashboard, served from
-the seeded rows in [`db/seed.sql`](db/seed.sql).
+This starts Postgres (schema + seed applied automatically on first run), the
+web app, and the `connect` ingest pipeline. Open <http://localhost:8080> to see
+the triage dashboard, served from the seeded rows in [`db/seed.sql`](db/seed.sql).
 
 Health check:
 
@@ -89,6 +90,40 @@ non-throwaway use.
 The dashboard's empty state shows automatically whenever the table has no rows
 (for example, on a fresh volume before the pipeline runs).
 
+## Pipeline (ingest + transform)
+
+The `connect` service runs a [Redpanda Connect](https://docs.redpanda.com/redpanda-connect/)
+pipeline ([`connect/wikipedia.yaml`](connect/wikipedia.yaml)) that ingests the
+Wikipedia [recent-changes SSE firehose](https://stream.wikimedia.org/v2/stream/recentchange)
+and transforms it into a clean, model-ready schema. Watch it live:
+
+```bash
+docker compose logs -f connect   # streams one clean JSON edit per line
+```
+
+Key choices:
+
+- **Source / SSE in Connect.** Consumed with `http_client` + `stream.enabled` +
+  the `lines` scanner. SSE frames look like `data: {…}`; we keep only `data:`
+  lines, strip the prefix, and `parse_json().catch(deleted())` so heartbeats
+  (`:ok`) and any non-JSON **fail closed** rather than passing through as raw
+  strings.
+- **Required `User-Agent`.** Wikipedia returns 403 without a descriptive UA; set
+  via `WIKI_USER_AGENT` (a default is in `docker-compose.yml`).
+- **Filter before the model.** We drop bots, non-`edit` events, and non-article
+  namespaces, and scope to **English Wikipedia** (`server_name ==
+  "en.wikipedia.org"`) — the firehose is *all* Wikimedia projects, and
+  Wikidata/Wiktionary edits aren't meaningful to a vandalism/substantive/trivia
+  classifier. Filtering here keeps the (later) LLM call volume bounded.
+- **Clean schema.** Projects `rev_id, title, editor, comment, size_delta, uri,
+  event_ts`; `size_delta = length.new - length.old`; the epoch `timestamp` is
+  formatted to an ISO-8601 string (TIMESTAMPTZ-safe), falling back to `meta.dt`.
+
+Phase 4 sinks to **stdout** only; the topic + Postgres UPSERT sink arrives with
+the LLM phases. Dedup is deferred to the Postgres `rev_id` UPSERT (an SSE stream
+rarely re-sends a `rev_id`; reconnect replays are absorbed by the UPSERT), so no
+in-pipeline cache is needed.
+
 ## Develop / test
 
 ```bash
@@ -111,6 +146,7 @@ app/
   Dockerfile
   requirements.txt
 db/                  # init.sql (schema) + seed.sql
+connect/             # wikipedia.yaml (Redpanda Connect ingest pipeline)
 ```
 
 ## Configuration

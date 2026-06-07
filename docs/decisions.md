@@ -167,3 +167,26 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** Keeps SQL trivial and reuses already-tested pure helpers, bounding dashboard cost on a table the firehose will grow. Label counts stay correct because they're computed over the same fetched window. Trade-off: filtering in app means we always fetch the recent window regardless of filter; fine at a 200-row window, and easily pushed into SQL later if the window grows.
 - **Made by:** Agent
 - **Date:** 2026-06-07
+
+## Phase 4 — Connect ingest + transform
+
+### Connect-only ingest; broker + Console deferred
+- **Decision:** Phase 4 adds only a standalone `connect` service (pinned `redpandadata/connect:4.95.0`) reading SSE → transform → `stdout`. The Redpanda broker and Console are deferred to the sink phase (Phase 7), when a topic actually exists to produce to / browse.
+- **Alternatives:** Stand up `redpanda` + `console` now (original TODO); add the broker immediately as the sink.
+- **Rationale / trade-offs:** Connect runs fine standalone, so adding a broker with nothing consuming it (and a Console to browse an empty cluster) would be premature services and startup-ordering surface for zero Phase-4 value. Defers complexity to the moment it's used, keeping the phase verifiable via `docker compose logs connect`. Trade-off: the broker story lands later, but it lands when it's actually exercised.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Dedup via Postgres UPSERT, not an in-pipeline Connect cache
+- **Decision:** Rely on the Postgres `rev_id` primary key + `ON CONFLICT DO UPDATE` (Phase 7) as the sole, durable dedup. No `cache_resources`/`dedupe` processor in Connect.
+- **Alternatives:** In-memory `memory` cache with TTL (ephemeral, originally planned); persistent cache (`file`/`redis`); a compacted topic keyed by `rev_id`.
+- **Rationale / trade-offs:** A Connect `memory` cache is an ephemeral, per-process hashtable that needs TTL tuning and loses state on restart; a persistent cache or compacted topic would re-implement the exact last-write-wins-by-key guarantee the Postgres PK/UPSERT already provides (and Postgres is already our store). On an SSE stream the same `rev_id` rarely re-arrives — reconnect replays are precisely what the UPSERT absorbs. A Connect cache earns its place for *poll-based* sources (HN/GitHub) that refetch the same ids every poll, to avoid wasted LLM calls; that's the trigger to add it.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### SSE handling, filter scope, and numeric/timestamp coercion (Bloblang)
+- **Decision:** Consume SSE via `http_client` (`stream.enabled` + `lines` scanner, `omit_empty`); keep only `data:` frames and `parse_json().catch(deleted())` to fail closed on heartbeats. Filter to `type=edit`, `bot=false`, `namespace=0`, **and `server_name=en.wikipedia.org`**. Project a clean schema; cast `rev_id`/`size_delta` with `.int64()` and format `event_ts` from the epoch `timestamp` via `ts_format(RFC3339, UTC)` with a `meta.dt` fallback.
+- **Alternatives:** Keep all Wikimedia projects (no `server_name` filter); leave `rev_id` as a float; use `meta.dt` directly without demonstrating the epoch→ISO conversion.
+- **Rationale / trade-offs:** The recentchange firehose is *all* projects; validating live showed it dominated by Wikidata `Q`-item / `wbsetclaim` edits and many non-English wikis, which are meaningless to a `vandalism|substantive|trivia` classifier — scoping to English Wikipedia is "filter before the model / data sense" and keeps later LLM volume bounded and relevant. The `.int64()` casts fix a real bug found in validation: JSON numbers are float64, so `.string()` rendered `rev_id` in scientific notation (`diff=1.35e+09`), breaking diff URLs. Formatting the epoch demonstrates the documented TIMESTAMPTZ gotcha while `meta.dt` is the safety net. Trade-off: English-only narrows the demo to one wiki by design (multi-wiki is out of scope).
+- **Made by:** Agent
+- **Date:** 2026-06-07

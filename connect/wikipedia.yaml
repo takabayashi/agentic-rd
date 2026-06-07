@@ -1,0 +1,61 @@
+# Redpanda Connect pipeline: Wikipedia recent-changes SSE -> clean schema.
+#
+# Phase 4: ingest + transform only, temporary stdout sink (no broker, no LLM).
+# - SSE is consumed with http_client (stream.enabled + lines scanner).
+# - Heartbeats / non-`data:` frames fail closed (.catch(deleted())).
+# - We filter BEFORE any model (drop bots, non-edits, non-article namespaces)
+#   and project a clean, model-ready schema.
+
+input:
+  http_client:
+    url: https://stream.wikimedia.org/v2/stream/recentchange
+    verb: GET
+    headers:
+      # Wikipedia 403s without a descriptive User-Agent (see .env.example).
+      User-Agent: ${WIKI_USER_AGENT}
+    stream:
+      enabled: true
+      reconnect: true
+      scanner:
+        lines:
+          omit_empty: true
+
+pipeline:
+  processors:
+    # 1) Keep only SSE `data:` frames; parse the JSON payload. Heartbeats
+    #    (`:ok`), `event:`/`id:` lines, and any non-JSON fail closed via
+    #    .catch(deleted()) — never passed downstream as raw strings.
+    - mapping: |
+        root = if content().string().has_prefix("data:") {
+          content().string().trim_prefix("data:").parse_json().catch(deleted())
+        } else {
+          deleted()
+        }
+    # 2) Filter before the model, then project a clean schema. Root is rebuilt
+    #    as a whole object so no stray fields leak through. We scope to English
+    #    Wikipedia article edits (server_name + namespace 0): the recentchange
+    #    stream is ALL Wikimedia projects, and Wikidata/Wiktionary/other-wiki
+    #    edits aren't meaningful to a vandalism|substantive|trivia classifier.
+    #    rev_id/size_delta are cast to int64 so they don't stringify in
+    #    scientific notation (e.g. in the diff URL) or arrive as floats.
+    - mapping: |
+        root = if this.type != "edit" || this.bot == true || this.namespace != 0 || this.server_name != "en.wikipedia.org" {
+          deleted()
+        } else {
+          {
+            "rev_id": this.revision.new.int64(),
+            "title": this.title,
+            "editor": this.user,
+            "comment": this.comment.or(""),
+            "size_delta": (this.length.new.or(0) - this.length.old.or(0)).int64(),
+            "uri": this.server_url.or("https://en.wikipedia.org") + "/w/index.php?diff=" + this.revision.new.int64().string(),
+            "event_ts": this.timestamp.ts_format("2006-01-02T15:04:05Z07:00", "UTC").catch(this.meta.dt),
+          }
+        }
+
+output:
+  stdout: {}
+
+logger:
+  level: INFO
+  format: logfmt

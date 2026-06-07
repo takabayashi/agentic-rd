@@ -81,9 +81,14 @@ Described from the user's perspective:
    `lines` scanner); `data:` prefix is stripped; non-JSON heartbeats are dropped
    (fail-closed, not passed through as raw strings).
 2. **Filter/project**: drop `bot == true`, drop non-`type=edit`, keep only the
-   main article namespace (`namespace == 0`); project to a clean schema.
-3. **Dedupe**: keyed on edit/revision id via a Connect cache resource (and
-   Postgres UPSERT as the durable backstop).
+   main article namespace (`namespace == 0`), and scope to English Wikipedia
+   (`server_name == "en.wikipedia.org"`) — the firehose is all Wikimedia
+   projects; project to a clean schema.
+3. **Dedupe**: handled durably by the Postgres `rev_id` UPSERT (Phase 7). An SSE
+   stream rarely re-sends a `rev_id` (reconnect replays are absorbed by the
+   UPSERT), so no in-pipeline Connect cache is used. A Connect cache keyed on
+   item id would be the right tool for a *poll-based* source (HN/GitHub), which
+   refetches the same ids each poll.
 4. **Classify (pass 1)**: a `branch` builds a prompt from title + comment + size
    delta; the model returns `{label, confidence}`.
 5. **Confidence branch**: if `confidence < threshold` (or label is `unclear`),
@@ -187,9 +192,10 @@ the core of the work):
   marginal gain, whereas a cheap default plus a self-correcting later pass keeps
   throughput bounded and converges to the right label. (Would flip toward
   explicit retries if classifications were authoritative/irreversible.)
-- **Dedupe**: poll/replay and re-emitted records are deduped via a Connect cache
-  keyed on edit/revision id and/or Postgres UPSERT, preventing reprocessing and
-  primary-key collisions.
+- **Dedupe**: re-emitted/replayed records are deduped durably by the Postgres
+  `rev_id` UPSERT (primary key), preventing duplicate rows and PK collisions. No
+  in-pipeline cache for this SSE source; a Connect cache keyed on item id would
+  be added for a poll-based source that refetches the same ids.
 - **Timestamp conversion**: epoch → ISO string in Bloblang before writing to
   `TIMESTAMPTZ`.
 - **Backpressure / volume**: ~50 edits/sec firehose; filtering happens *before*

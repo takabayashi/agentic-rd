@@ -98,26 +98,28 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 - [x] Stopping Postgres yields a graceful 503 (no crash); restarting recovers (verified: 200)
 - [x] An out-of-enum label is rejected by the CHECK constraint (`classified_edits_label_check`)
 
-## Phase 4 — Connect ingest + transform (filter, project, dedupe)
+## Phase 4 — Connect ingest + transform (filter, project)
 
-> Goal: pull the real firehose and turn it into a clean, deduped, model-ready
-> schema. No LLM yet — temporary `stdout` sink.
+> Goal: pull the real firehose and turn it into a clean, model-ready schema.
+> No LLM yet — temporary `stdout` sink. **Connect-only**: the broker + Console
+> are deferred to the sink phase (nothing consumes a topic yet), and dedup is
+> deferred to the Postgres `rev_id` UPSERT (Phase 7), so no in-pipeline cache.
 
-- [ ] `redpanda` (`--mode=dev-container`) + `console` services with healthchecks
-- [ ] `connect` service mounting `connect/wikipedia.yaml`: `http_client` SSE input (`stream.enabled`, `lines` scanner) with descriptive `User-Agent`
-- [ ] Parse frames: strip `data:` prefix; `parse_json().catch(deleted())` to fail-closed on heartbeats (not `if`)
-- [ ] Filter + project in one pass (root rebuilt from `this`): keep `type=edit`, `bot=false`, `namespace=0`; build clean schema incl. `size_delta = size_new - size_old`; `deleted()` the rest
-- [ ] Convert epoch → ISO for `event_ts` (TIMESTAMPTZ-safe), fallback to `meta.dt`
-- [ ] In-memory `cache` dedupe keyed on `rev_id`; drop on cache-add error
-- [ ] **Security:** set `WIKI_USER_AGENT` (Wikipedia 403s without it); treat title/comment as untrusted data throughout
-- [ ] **Docs:** document source choice, SSE quirks, the User-Agent requirement, filter + dedupe rationale
+- [x] Standalone `connect` service (pinned `connect:4.95.0`) mounting `connect/wikipedia.yaml`: `http_client` SSE input (`stream.enabled`, `lines` scanner, `omit_empty`) with descriptive `User-Agent`
+- [x] Parse frames: keep `data:` lines, strip prefix; `parse_json().catch(deleted())` to fail-closed on heartbeats (not `if`)
+- [x] Filter + project in one pass (root rebuilt as a whole object): keep `type=edit`, `bot=false`, `namespace=0`, **`server_name=en.wikipedia.org`**; build clean schema incl. `size_delta` (int64); `deleted()` the rest
+- [x] Convert epoch → ISO for `event_ts` (TIMESTAMPTZ-safe) via `ts_format`, fallback to `meta.dt`; cast `rev_id`/`size_delta` to int64 (avoids float/sci-notation in the diff URL)
+- [x] **Security:** set `WIKI_USER_AGENT` (Wikipedia 403s without it); treat title/comment as untrusted data throughout
+- [x] **Docs:** document source choice, SSE quirks, the User-Agent requirement, the filter rationale (incl. en.wikipedia scoping)
 
 **Acceptance criteria**
-- [ ] Connect logs a steady stream of clean projected JSON to stdout
-- [ ] Only main-namespace, non-bot `edit`s survive; each has all schema fields
-- [ ] `event_ts` is valid ISO-8601 (no raw epoch); `size_delta` correct
-- [ ] Runs ≥2 min without crashing on heartbeats / non-JSON lines
-- [ ] Emitting the same `rev_id` twice yields one downstream record
+- [x] Connect logs a steady stream of clean projected JSON to stdout
+- [x] Only main-namespace, non-bot English-Wikipedia `edit`s survive; each has all schema fields
+- [x] `event_ts` is valid ISO-8601 (no raw epoch); `size_delta` correct (incl. negatives)
+- [x] Runs ≥2 min without crashing on heartbeats / non-JSON lines (validated: 0 restarts, 0 errors, 239 records)
+
+> Dedup criterion moved to Phase 7 (Postgres `rev_id` UPSERT is the durable
+> backstop; SSE rarely re-sends a `rev_id`).
 
 ## Phase 5 — LLM pass-1 classification (Ollama) + robust parse
 
