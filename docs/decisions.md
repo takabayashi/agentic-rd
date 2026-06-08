@@ -234,3 +234,63 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** Two things changed the calculus. (1) The whole `docker compose up` was validated on **Docker Desktop** (~18 GB VM, container Ollama healthy with 0 restarts — the crash was Colima-VZ-specific), so the 1.9 GiB constraint that motivated the tiny model no longer applies on the actual run environment. (2) Live end-to-end testing showed `qwen2.5:1.5b` labels ~85% of real edits `vandalism` at 0.96–1.00 confidence — including obvious good edits (category moves, adding refs, cleanup); because the errors are *high-confidence*, the Phase 6 escalation (low-confidence trigger) can't correct them, making the triage output unusable. `llama3.2` classified sensibly in Phase 5. Trade-off: `llama3.2` needs ~4 GB VM and carries the Llama license vs Qwen's Apache-2.0 — acceptable since it's run locally, not redistributed, and the small models remain a documented escape hatch for constrained VMs.
 - **Made by:** Human+Agent
 - **Date:** 2026-06-07
+
+## Phase 6 — Confidence-based escalation (the multi-step loop)
+
+### Fetch the real diff for every edit (MediaWiki compare API) as the classification evidence
+- **Decision:** Before classifying, enrich every surviving edit with its actual diff via a Connect `branch` calling the MediaWiki REST compare API (`/w/rest.php/v1/revision/{from}/compare/{to}`, keyed off the event's `revision.old`/`revision.new`); keep only the changed lines (`+`/`-`/`~`, context dropped), truncate to ~4 KB, and stash it in **metadata** (not the clean root). The fetch fails **closed** (`.catch("")`) and is throttled by a `local` `wiki_api` rate limit (10/s).
+- **Alternatives:** Classify on SSE metadata only (title/comment/size_delta — no diff); fetch the diff *only* on escalation (diff-on-escalation); persist the diff in the record/DB.
+- **Rationale / trade-offs:** The recentchange event is only edit *metadata* and never the changed text, so metadata-only classification is guessing for the ambiguous cases (empty/cryptic comment, named user, small delta) — exactly the ones that matter. The diff is the only genuinely new evidence, so we fetch it for *every* survivor and let pass-1 reason over real content (human chose this over diff-on-escalation for max per-edit accuracy). Storing it in metadata keeps the projected root exactly DB-ready (no diff leaks into the schema or stdout) and means Phase 7's `sql_insert` needs no change. Fail-closed + rate limit keep a transient API hiccup or politeness limit from stalling/crashing the firehose. Trade-off: one outbound HTTP call per surviving edit (latency + Wikipedia API load) — bounded by the pre-model filter and the rate limit, with 429s/rate caps under sustained high volume as the documented production failure mode (observed live: REST compare returns 429, fails closed to an empty diff, classification continues).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Confidence `switch` escalation as a second re-prompt pass
+- **Decision:** After pass-1, a `switch` checks `this.confidence < ${CONFIDENCE_THRESHOLD:0.7} || this.label == "unclear"` and routes matches into a second `branch` that re-classifies with a more rigorous per-label rubric, the editor identity, and the first-pass `{label, confidence}` for self-critique (re-reading the same diff), then stamps `escalated = true`. `escalated` defaults to `false` in projection so confident rows skip the 2nd model call. `CONFIDENCE_THRESHOLD` is config-interpolated (Connect substitutes `${VAR:default}` before parse), so it's env-configurable with a `0.7` default.
+- **Alternatives:** One classification call (no escalation); escalate by fetching *more* diff context (moot now that pass-1 already has the full diff); a fixed always-two-passes design.
+- **Rationale / trade-offs:** Satisfies the brief's "more than one prompt / confidence-based branching" with a real cost lever — only ambiguous edits pay the second model call, and the threshold visibly trades escalation volume against coverage. Since pass-1 already has the diff, escalation adds *better reasoning* (rubric + reflection + editor signal), not new evidence. The `switch` doubles as the brief's "route" requirement (route ambiguous items to escalation) alongside the single labeled topic in Phase 7. Trade-off: the escalation prompt re-reads the same diff, so its lift is judgment, not facts; acceptable because the diff fetch (above) supplies the missing evidence for both passes.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Retries-on-bad-output: fallback-to-`unclear` + UPSERT, not an in-pipeline loop (restated for pass 2)
+- **Decision:** Keep the Phase 5 stance for both passes: malformed/empty model replies normalize to `unclear` via the identical robust parse (first `{...}` extract + enum-normalize + `[0,1]` clamp) rather than retrying the model inline. A later, more confident pass corrects the row through the Postgres `rev_id` UPSERT (Phase 7).
+- **Alternatives:** In-pipeline retry loop on bad output (e.g. a `retry` processor around the `branch`); raise/drop on parse failure.
+- **Rationale / trade-offs:** On a ~50/sec firehose, blocking a synchronous model call to retry adds latency and cost for marginal gain, while a cheap default plus a self-correcting later pass keeps throughput bounded and converges. Reused verbatim in pass 2 so both passes are crash-safe, enum-constrained, and advisory-only (the prompt-injection guardrail). Would flip toward explicit retries if classifications were authoritative/irreversible.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-07
+
+### Fail-safe default + set `escalated` inside result_map (Bloblang root-rebuild gotcha)
+- **Decision:** Add a `mapping` after pass-1 that starts with `root = this` and defaults a missing/non-enum `label` to `unclear` and a missing/non-numeric `confidence` to `0`. Set `escalated = true` *inside* the escalation `branch.result_map` (alongside label/confidence) rather than in a trailing standalone `- mapping: root.escalated = true`.
+- **Alternatives:** Null-guard only inside the switch `check`; the trailing standalone mapping we first wrote.
+- **Rationale / trade-offs:** When the pass-1 `branch`'s `ollama_chat` call fails (model unreachable/errored — e.g. pointing at a crash-looping containerized Ollama), Connect skips `result_map`, so the record reached the escalation `switch` with no `label`/`confidence` — emitting blank rows and crashing the `switch` on `null < threshold` (observed live as 328 `cannot compare types null` errors, 0/303 rows labelled). The fail-safe defaults such rows to `unclear`/0, realizing the PRD's "transient LLM failure → land as `unclear`, corrected by a later UPSERT" and keeping the firehose crash-free; it is idempotent for already-classified rows. Separately, a standalone Bloblang `mapping` rebuilds `root` from scratch, so a partial `root.escalated = true` dropped every other field (wiped escalated rows to `{"escalated":true}` in testing — the exact gotcha the brief calls out). `branch.result_map` inverts that rule (it grafts partial assignments back), so `escalated` belongs there; the fail-safe mapping uses `root = this` for the same reason.
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### `ollama-pull` also needs `extra_hosts` for the host-Ollama override
+- **Decision:** Add `host.docker.internal:host-gateway` to the `ollama-pull` service (it already exists on `connect`), so `OLLAMA_ADDRESS=http://host.docker.internal:11434` works for the model-pull job too.
+- **Alternatives:** Only map it on `connect` (prior state); skip the pull job when using a host Ollama.
+- **Rationale / trade-offs:** With the host override, `ollama-pull` sets `OLLAMA_HOST=http://host.docker.internal:11434` but, lacking the host mapping, couldn't resolve the name (`could not connect to ollama server`), failed `exit 1`, and — because `connect` gates on `service_completed_successfully` — blocked the whole pipeline. The Phase 5 host-override decision mapped only `connect`; this completes it so the documented one-command host path actually starts end-to-end on Colima/Linux (where `host.docker.internal` isn't automatic). Harmless on the in-container default (the mapping is simply unused).
+- **Made by:** Agent
+- **Date:** 2026-06-07
+
+### Developer Makefile for the compose + test loop
+- **Decision:** Add a root `Makefile` wrapping the recurring workflow: service control (`up`/`down`/`down-v`/`restart`/`restart-connect [THRESHOLD=]`/`restart-webapp`/`ps`/`build`), pipeline observability (`logs-connect`/`diffs`/`labels`/`escalations`/`errors`/`psql`/`ollama-check`), and quality (`install`/`test`/`lint`/`fmt`/`yamllint`/`connect-lint`/`check`). `check` mirrors CI minus build/gitleaks.
+- **Alternatives:** Shell scripts under `scripts/`; document raw commands only; a task runner (`just`/`task`).
+- **Rationale / trade-offs:** A Makefile is ubiquitous (no extra install), self-documents via `make help`, and captures the exact error-prone commands (esp. `restart-connect THRESHOLD=…` and the log-grep helpers) surfaced while debugging Phase 6. Pure convenience — no runtime surface; the underlying `docker compose`/`pytest`/`ruff` paths still work directly.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+## Phase 7 — Dual sink end-to-end + connector hardening (planning)
+
+### Model audit log as a full Redpanda topic (not a Postgres table or logs)
+- **Decision:** Plan a dedicated **append-only** `model.audit` topic as a second fan-out output capturing one record per edit with both passes' raw model I/O (`{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2|null}`); short **time-based retention**, **not compacted**, keyed by `rev_id`. Capture each pass's input/raw response in metadata during its `branch`, reshape in the audit output's `processors`. Defer any sync to a `model_calls` table to later.
+- **Alternatives:** Structured `log` lines only (cheapest, no infra); a `model_calls` Postgres audit table (queryable, reuses the DB); one-record-per-call (vs per-edit-with-nested-passes); a compacted/keyed-LWW topic (rejected — collapses history).
+- **Rationale / trade-offs:** The brief's storage is already a stream + DB, and an audit *stream* fits replay / prompt-eval / drift-inspection and the "explain why this label" story better than rows; the human chose it explicitly and is fine syncing to a table later (a Kafka→Postgres sink is trivial to add). Append-only + time-retention is correct because every call is a distinct event (unlike the LWW-by-`rev_id` classified topic). Per-edit-with-nested-passes keeps escalation linked to its pass-1 in one message and avoids splitting into two. Marked an **Extension** (beyond the brief's asked scope) so it doesn't bloat the core ingest→reason→serve path. Caveats: stores full prompts + raw responses incl. the (capped) diff — volume/retention matters, and the prompts hold untrusted title/comment/diff (advisory, local-only).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Producer-side `zstd` compression on the topic outputs
+- **Decision:** Compress both `wiki.edits.classified` and `model.audit` outputs with `zstd`, paired with the output batching from connector hardening.
+- **Alternatives:** `lz4`/`snappy` (faster, weaker ratio), `gzip` (slower), no compression.
+- **Rationale / trade-offs:** The payloads are text JSON + wikitext diffs, which compress ~5-10x; at post-filter throughput (~1-5 edits/sec, doubled by escalation) CPU isn't the bottleneck, so we optimize for ratio with `zstd`. Compression operates per-batch, so it synergizes with the planned batching (bigger batches → better ratio) and directly offsets the audit topic's volume/retention cost. It is transparent to consumers and Console (standard Kafka batch compression). Trade-off: a little producer CPU; tiny batches compress less (fine at this steady, modest volume).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08

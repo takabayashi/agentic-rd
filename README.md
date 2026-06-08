@@ -7,11 +7,12 @@ triages each edit with a multi-step LLM reasoning loop (Redpanda Connect +
 Ollama), and serves the results on a live dashboard. Built for the Redpanda
 Field Deployed Engineer build exercise.
 
-> Status: **Phase 5** — a Redpanda Connect pipeline ingests and transforms the
-> live Wikipedia firehose and classifies each surviving edit with a local Ollama
-> model (pass-1 `{label, confidence}`), currently to stdout; the dashboard still
-> serves seeded Postgres rows. The confidence-based escalation pass and the
-> topic/UPSERT sink land in later phases (see [`docs/TODO.md`](docs/TODO.md)).
+> Status: **Phase 6** — a Redpanda Connect pipeline ingests and transforms the
+> live Wikipedia firehose, fetches each edit's real diff, and classifies it with
+> a local Ollama model (pass-1 `{label, confidence}`) plus a confidence-based
+> escalation pass for ambiguous edits — currently to stdout; the dashboard still
+> serves seeded Postgres rows. The topic/UPSERT sink lands in Phase 7 (see
+> [`docs/TODO.md`](docs/TODO.md)).
 
 ## Run
 
@@ -125,18 +126,47 @@ sink arrives in Phase 7. Dedup is deferred to the Postgres `rev_id` UPSERT (an
 SSE stream rarely re-sends a `rev_id`; reconnect replays are absorbed by the
 UPSERT), so no in-pipeline cache is needed.
 
-## Classification (pass 1)
+## Classification (diff-enriched, two-pass)
 
-Each surviving edit is classified by a **local Ollama model** through a Connect
-`branch` (in [`connect/wikipedia.yaml`](connect/wikipedia.yaml)). The dashboard
-isn't wired to these results yet (that's the Phase 7 sink) — watch them on stdout:
+Each surviving edit is enriched with its **actual diff** and classified by a
+**local Ollama model** through Connect `branch`es (in
+[`connect/wikipedia.yaml`](connect/wikipedia.yaml)). The dashboard isn't wired to
+these results yet (that's the Phase 7 sink) — watch them on stdout:
 
 ```bash
-docker compose logs -f connect   # each JSON line now carries label + confidence
+docker compose logs -f connect   # each line carries label + confidence + escalated
 ```
 
 How it works:
 
+- **Fetch the real diff (the actual evidence).** The recentchange SSE event is
+  only edit *metadata* (title, comment, size delta) — never the changed text. A
+  `branch` fetches each edit's diff from the MediaWiki REST compare API
+  (`/w/rest.php/v1/revision/{from}/compare/{to}`, keyed off the event's parent
+  and new revision ids), keeps only the changed lines (`+ added` / `- removed` /
+  `~ modified`, dropping unchanged context), truncates to ~4 KB, and stashes it
+  in metadata so the clean record stays DB-ready. The fetch fails **closed**: a
+  deleted/suppressed revision, timeout, or rate-limit yields an empty diff and
+  classification still proceeds on metadata. A local rate limit (`wiki_api`,
+  10/s) keeps us a polite API citizen.
+- **Two passes (cost vs. accuracy).** Pass-1 classifies every survivor from the
+  diff + metadata. A confidence `switch` then escalates only the ambiguous ones —
+  `confidence < CONFIDENCE_THRESHOLD` (default `0.7`) **or** `label == unclear` —
+  to a second, more rigorous pass that re-reads the same diff with a detailed
+  per-label rubric, the editor identity (an anonymous IP is a vandalism signal),
+  and the first-pass result for self-critique. Confident pass-1 rows skip the
+  second model call (`escalated = false`); escalated rows are stamped
+  `escalated = true`. Lower `CONFIDENCE_THRESHOLD` to escalate less; raise it to
+  escalate more.
+- **Retries on bad output (and an unreachable model).** We deliberately *do not*
+  run an in-pipeline retry loop. A malformed/empty reply — or a record the
+  `branch` couldn't classify at all because the model was unreachable (Connect
+  skips `result_map` when a branch's inner call fails) — falls back to `unclear`
+  via a fail-safe default, so a row is never emitted with an empty label and the
+  escalation `switch` never compares a null confidence. A later, more confident
+  pass corrects the row via the Postgres UPSERT (Phase 7). On a noisy firehose
+  this keeps latency/cost bounded and self-corrects, which we prefer over
+  blocking retries (we'd flip if classifications were authoritative).
 - **Local LLM via Ollama.** A pinned `ollama` service serves the model; a
   one-shot `ollama-pull` preloads it on startup, and `connect` waits for that to
   complete (`service_completed_successfully`) so there's no cold-start "model not
@@ -169,18 +199,22 @@ OLLAMA_ADDRESS=http://host.docker.internal:11434 docker compose up
   so `docker compose up` is self-contained on platforms that support it (Docker
   Desktop, Linux).
 - **`branch` keeps the record intact.** `request_map` sends only the fields that
-  inform a label (title, comment, `size_delta`); `ollama_chat` returns JSON
-  (`response_format: json`, `temperature: 0`); `result_map` grafts `{label,
-  confidence}` back onto the original record rather than overwriting it.
+  inform a label (title, comment, `size_delta`, and the diff); `ollama_chat`
+  returns JSON (`response_format: json`, `temperature: 0`); `result_map` grafts
+  `{label, confidence}` back onto the original record rather than overwriting it.
+  Both passes use this same pattern.
 - **Robust, crash-safe parse.** We extract the first `{...}` block from the model
   reply (handles any prose around it), fall back to `{}` on failure, normalize
   the label (`trim().lowercase()`) to the enum — anything unknown or empty
   becomes `unclear` — and coerce `confidence` to a number clamped to `[0,1]`. A
-  malformed or empty reply yields a valid `unclear` row instead of crashing.
+  malformed or empty reply yields a valid `unclear` row instead of crashing. The
+  identical parse is applied in both passes.
 - **Security.** Output is constrained to the fixed enum
-  (`vandalism|substantive|trivia|unclear`), so prompt-injection in the
-  attacker-controlled title/comment can't change system behavior; the
-  classification is advisory only and nothing leaves the host.
+  (`vandalism|substantive|trivia|unclear`) in both passes, so prompt-injection in
+  the attacker-controlled title/comment/diff can't change system behavior; the
+  classification is advisory only. No edit data is sent to any third-party model
+  (inference is local); the only outbound calls are the public Wikipedia SSE feed
+  and the read-only diff fetch (which sends just revision ids).
 
 ## Develop / test
 

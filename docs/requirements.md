@@ -51,9 +51,10 @@ Described from the user's perspective:
   bot edits, heartbeats, and non-article namespaces are dropped before any model
   runs, so the feed (and the LLM cost) stays focused on real content edits.
 - **Multi-step LLM reasoning, not one giant prompt.** As a reviewer of the
-  system, I can see the agent has structure: a cheap first-pass classification,
-  a confidence-based escalation pass that pulls more diff context for ambiguous
-  cases, output validation, and retries on malformed model output.
+  system, I can see the agent has structure: a per-edit diff fetch feeding a
+  cheap first-pass classification, a confidence-based escalation pass that
+  re-reasons over ambiguous cases, output validation, and a fallback-to-`unclear`
+  on malformed model output.
 - **Confidence-based prioritization & filtering.** As a moderator, I can filter
   the dashboard by label and sort by confidence, so low-confidence or
   high-risk edits surface to the top.
@@ -89,10 +90,14 @@ Described from the user's perspective:
    UPSERT), so no in-pipeline Connect cache is used. A Connect cache keyed on
    item id would be the right tool for a *poll-based* source (HN/GitHub), which
    refetches the same ids each poll.
-4. **Classify (pass 1)**: a `branch` builds a prompt from title + comment + size
-   delta; the model returns `{label, confidence}`.
-5. **Confidence branch**: if `confidence < threshold` (or label is `unclear`),
-   escalate — a second prompt with richer diff context re-classifies.
+4. **Enrich + classify (pass 1)**: fetch the edit's real diff from the MediaWiki
+   compare API (fail-closed to empty on error), then a `branch` builds a prompt
+   from the diff + title + comment + size delta; the model returns
+   `{label, confidence}`.
+5. **Confidence escalation**: if `confidence < CONFIDENCE_THRESHOLD` (or label is
+   `unclear`), a `switch` escalates to a second, more rigorous pass that re-reads
+   the same diff with a per-label rubric, the editor identity, and the first-pass
+   result; `escalated` is set true. Confident rows skip the 2nd call.
 6. **Validate/normalize**: extract the first `{...}` block, fall back to
    `unclear` on parse failure, normalize the label to the enum
    (`.string().trim().lowercase()` + map to allowed set).
