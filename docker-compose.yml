@@ -64,6 +64,11 @@ services:
     environment:
       OLLAMA_HOST: ${OLLAMA_ADDRESS:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+    # Same host mapping as `connect`, so the documented host-Ollama override
+    # (OLLAMA_ADDRESS=http://host.docker.internal:11434) also lets the pull job
+    # reach a host-native Ollama; otherwise the hostname doesn't resolve here.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     entrypoint: ["/bin/sh", "-c"]
     command: ["ollama pull \"$$OLLAMA_MODEL\""]
     restart: "no"
@@ -78,6 +83,9 @@ services:
       WIKI_USER_AGENT: ${WIKI_USER_AGENT:-agentic-rd/0.1 (https://github.com/takabayashi/agentic-rd)}
       OLLAMA_ADDRESS: ${OLLAMA_ADDRESS:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      # Pass-1 results below this confidence (or labelled `unclear`) escalate to
+      # a second, more rigorous classification pass. Lower it to escalate less.
+      CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.7}
     # Lets the documented host-Ollama override resolve everywhere (set
     # OLLAMA_ADDRESS=http://host.docker.internal:11434 to use a host GPU).
     extra_hosts:

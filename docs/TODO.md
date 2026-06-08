@@ -151,17 +151,25 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > Goal: a structured second pass for ambiguous items — the "more than one prompt"
 > agent topology.
 
-- [ ] `switch` on `confidence < CONFIDENCE_THRESHOLD || label == "unclear"` → richer escalation `branch` (more context); reuse the robust parse; set `escalated = true`
-- [ ] `CONFIDENCE_THRESHOLD` env-configurable
-- [ ] Decide retries-on-bad-output explicitly: **fallback-to-`unclear` + later UPSERT correction** instead of an in-pipeline retry loop; document the why (latency/cost vs. self-correcting convergence)
-- [ ] **Security:** same enum-constraint + advisory-only guarantees apply to pass 2
-- [ ] **Docs:** document why two passes (cost vs. accuracy) and when escalation triggers
+> **Scope expansion (this pass):** added a per-edit **diff fetch** (MediaWiki
+> compare API) so classification reasons over the real changed text — the SSE
+> event is only metadata. This supersedes the original "escalation pulls more
+> diff context" framing: the diff now enriches *every* edit, and escalation is a
+> re-prompt over the same diff (richer rubric + first-pass result). See
+> `docs/decisions.md` (Phase 6).
+
+- [x] Diff enrichment `branch` (MediaWiki REST compare API) → compact `+/-` diff in metadata; fail-closed to empty; `wiki_api` `local` rate limit; `log` of `rev_id` + diff length
+- [x] `switch` on `confidence < CONFIDENCE_THRESHOLD || label == "unclear"` → richer escalation `branch` (rubric + editor + first-pass result); reuse the robust parse; set `escalated = true`
+- [x] `CONFIDENCE_THRESHOLD` env-configurable (`${CONFIDENCE_THRESHOLD:0.7}` in the pipeline; wired into the `connect` service in compose)
+- [x] Decide retries-on-bad-output explicitly: **fallback-to-`unclear` + later UPSERT correction** instead of an in-pipeline retry loop; document the why (latency/cost vs. self-correcting convergence)
+- [x] **Security:** same enum-constraint + advisory-only guarantees apply to pass 2
+- [x] **Docs:** document why two passes (cost vs. accuracy) and when escalation triggers
 
 **Acceptance criteria**
-- [ ] High-confidence pass-1 records skip the 2nd call (`escalated = false`)
-- [ ] Low-confidence / `unclear` records trigger pass 2 (`escalated = true`)
-- [ ] Lowering `CONFIDENCE_THRESHOLD` measurably reduces escalations
-- [ ] Pass-2 output is enum-normalized and crash-safe
+- [x] High-confidence pass-1 records skip the 2nd call (`escalated = false`)
+- [x] Low-confidence / `unclear` records trigger pass 2 (`escalated = true`)
+- [x] Lowering `CONFIDENCE_THRESHOLD` measurably reduces escalations
+- [x] Pass-2 output is enum-normalized and crash-safe
 
 ## Phase 7 — Dual sink end-to-end + connector hardening
 
