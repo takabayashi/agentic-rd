@@ -1,5 +1,5 @@
 # Pinned base image (Python 3.12.13 slim). Repinned deliberately, not :latest.
-FROM python:3.12.13-slim
+FROM python:3.14.5-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
