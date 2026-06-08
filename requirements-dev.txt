@@ -1,4 +1,4 @@
 # Lint/format tooling for CI and local checks. Pinned, kept OUT of the app image
 # (runtime + test deps live in app/requirements.txt). See docs/decisions.md.
-ruff==0.14.5
+ruff==0.15.16
 yamllint==1.37.1
