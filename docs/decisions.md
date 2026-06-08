@@ -287,3 +287,10 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** The brief's storage is already a stream + DB, and an audit *stream* fits replay / prompt-eval / drift-inspection and the "explain why this label" story better than rows; the human chose it explicitly and is fine syncing to a table later (a Kafka→Postgres sink is trivial to add). Append-only + time-retention is correct because every call is a distinct event (unlike the LWW-by-`rev_id` classified topic). Per-edit-with-nested-passes keeps escalation linked to its pass-1 in one message and avoids splitting into two. Marked an **Extension** (beyond the brief's asked scope) so it doesn't bloat the core ingest→reason→serve path. Caveats: stores full prompts + raw responses incl. the (capped) diff — volume/retention matters, and the prompts hold untrusted title/comment/diff (advisory, local-only).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
+
+### Producer-side `zstd` compression on the topic outputs
+- **Decision:** Compress both `wiki.edits.classified` and `model.audit` outputs with `zstd`, paired with the output batching from connector hardening.
+- **Alternatives:** `lz4`/`snappy` (faster, weaker ratio), `gzip` (slower), no compression.
+- **Rationale / trade-offs:** The payloads are text JSON + wikitext diffs, which compress ~5-10x; at post-filter throughput (~1-5 edits/sec, doubled by escalation) CPU isn't the bottleneck, so we optimize for ratio with `zstd`. Compression operates per-batch, so it synergizes with the planned batching (bigger batches → better ratio) and directly offsets the audit topic's volume/retention cost. It is transparent to consumers and Console (standard Kafka batch compression). Trade-off: a little producer CPU; tiny batches compress less (fine at this steady, modest volume).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
