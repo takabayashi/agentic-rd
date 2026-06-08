@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Wikipedia Edit-Triage Agent — Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --bg-hero: linear-gradient(135deg, #fff5f4 0%, #f4f6f9 45%, #eef2ff 100%);
+    --bg-elevated: #ffffff;
+    --bg-nav: rgba(255, 255, 255, 0.72);
+    --bg-card: #ffffff;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --accent: #e03131;
+    --accent-2: #6366f1;
+    --accent-soft: rgba(224, 49, 49, 0.08);
+    --accent-glow: rgba(224, 49, 49, 0.18);
+    --chip-bg: #f1f5f9;
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+    --shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
+    --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.12);
+    --done: #059669;
+    --done-bg: rgba(5, 150, 105, 0.1);
+    --planned: #d97706;
+    --planned-bg: rgba(217, 119, 6, 0.1);
+    --partial: #2563eb;
+    --partial-bg: rgba(37, 99, 235, 0.1);
+    --radius: 14px;
+    --radius-sm: 8px;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --nav-h: 56px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f17;
+      --bg-hero: linear-gradient(135deg, #1a0f0f 0%, #0b0f17 50%, #0f1220 100%);
+      --bg-elevated: #121826;
+      --bg-nav: rgba(11, 15, 23, 0.82);
+      --bg-card: #121826;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --border: #1e293b;
+      --accent: #ff6b6b;
+      --accent-2: #818cf8;
+      --accent-soft: rgba(255, 107, 107, 0.12);
+      --accent-glow: rgba(255, 107, 107, 0.22);
+      --chip-bg: #1e293b;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+      --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.45);
+      --done: #34d399;
+      --done-bg: rgba(52, 211, 153, 0.12);
+      --planned: #fbbf24;
+      --planned-bg: rgba(251, 191, 36, 0.12);
+      --partial: #60a5fa;
+      --partial-bg: rgba(96, 165, 250, 0.12);
+    }
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--nav-h) + 20px); }
+  body {
+    margin: 0;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    background: var(--bg-hero);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: "";
+    position: absolute;
+    top: -120px; right: -80px;
+    width: 420px; height: 420px;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-inner {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 56px 28px 40px;
+    position: relative;
+  }
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    padding: 5px 12px;
+    border-radius: 999px;
+    margin-bottom: 16px;
+  }
+  .hero-badge::before {
+    content: "";
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.85); }
+  }
+  .hero h1 {
+    margin: 0 0 14px;
+    font-size: clamp(1.8rem, 4vw, 2.6rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+    max-width: 720px;
+  }
+  .hero .tagline {
+    margin: 0 0 28px;
+    color: var(--text-muted);
+    font-size: 1.05rem;
+    max-width: 680px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 32px; }
+  .chip {
+    font-size: 0.76rem;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--chip-bg);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    white-space: nowrap;
+    transition: transform 0.15s, border-color 0.15s;
+  }
+  .chip:hover { transform: translateY(-1px); border-color: var(--accent); }
+  .chip.primary {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  /* ── Progress strip ── */
+  .progress-strip {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    box-shadow: var(--shadow-sm);
+  }
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .progress-header span { font-size: 0.82rem; color: var(--text-muted); }
+  .progress-header strong { font-size: 0.95rem; }
+  .progress-bar {
+    height: 8px;
+    background: var(--chip-bg);
+    border-radius: 999px;
+    overflow: hidden;
+    display: flex;
+  }
+  .progress-bar .seg-done {
+    background: linear-gradient(90deg, var(--done), color-mix(in srgb, var(--done) 70%, var(--accent)));
+    transition: width 0.6s ease;
+  }
+  .progress-bar .seg-planned { background: var(--border); flex: 1; }
+  .phase-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 14px;
+  }
+  .phase-pill {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .phase-pill.done { background: var(--done-bg); color: var(--done); border-color: color-mix(in srgb, var(--done) 30%, transparent); }
+  .phase-pill.planned { background: var(--planned-bg); color: var(--planned); border-color: color-mix(in srgb, var(--planned) 30%, transparent); }
+
+  /* ── Nav ── */
+  nav.toc {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    background: var(--bg-nav);
+    border-bottom: 1px solid var(--border);
+    height: var(--nav-h);
+  }
+  nav.toc .nav-inner {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 0 20px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  nav.toc .nav-inner::-webkit-scrollbar { display: none; }
+  nav.toc a {
+    text-decoration: none;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 6px 11px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  nav.toc a:hover { background: var(--chip-bg); color: var(--text); }
+  nav.toc a.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* ── Main ── */
+  main {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 12px 28px 100px;
+  }
+
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin: 28px 0 8px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend i {
+    width: 12px; height: 12px;
+    border-radius: 3px;
+    display: inline-block;
+    border: 1px solid transparent;
+  }
+
+  section {
+    padding-top: 44px;
+    animation: fadeUp 0.5s ease both;
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .section-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 28px 24px;
+    box-shadow: var(--shadow);
+    transition: box-shadow 0.25s;
+  }
+  .section-card:hover { box-shadow: var(--shadow-lg); }
+
+  section h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin: 0 0 6px;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  section h2 .num {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    border-radius: 6px;
+    padding: 2px 8px;
+  }
+  section p.desc {
+    color: var(--text-muted);
+    margin: 0 0 20px;
+    max-width: 820px;
+    font-size: 0.92rem;
+  }
+
+  .tag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .tag.done { background: var(--done-bg); color: var(--done); }
+  .tag.planned { background: var(--planned-bg); color: var(--planned); }
+  .tag.partial { background: var(--partial-bg); color: var(--partial); }
+
+  .diagram {
+    background: color-mix(in srgb, var(--bg) 60%, var(--bg-elevated));
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 20px;
+    overflow: auto;
+    max-height: 75vh;
+  }
+  .diagram + .diagram { margin-top: 16px; }
+  .diagram .mermaid { min-width: min-content; }
+
+  footer {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 28px;
+    color: var(--text-muted);
+    font-size: 0.84rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  footer code {
+    font-family: var(--mono);
+    font-size: 0.8em;
+    background: var(--chip-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.84em;
+    background: var(--chip-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  @media (max-width: 640px) {
+    .hero-inner, main { padding-left: 18px; padding-right: 18px; }
+    .section-card { padding: 20px 18px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="hero-badge">Architecture Report</div>
+    <h1>Wikipedia Edit-Triage Agent</h1>
+    <p class="tagline">
+      Ingests the Wikipedia recent-changes firehose via Redpanda Connect, classifies
+      each edit with a local Ollama model, and serves triaged results on a live
+      moderator dashboard backed by Postgres.
+    </p>
+    <div class="chips">
+      <span class="chip primary">FastAPI</span>
+      <span class="chip primary">Redpanda Connect</span>
+      <span class="chip primary">Ollama</span>
+      <span class="chip primary">Postgres 16</span>
+      <span class="chip">Bloblang</span>
+      <span class="chip">Docker Compose</span>
+      <span class="chip">psycopg pool</span>
+      <span class="chip">GitHub Actions</span>
+      <span class="chip">ruff · pytest · gitleaks</span>
+      <span class="chip">Python 3.12</span>
+    </div>
+    <div class="progress-strip">
+      <div class="progress-header">
+        <strong>Build progress — Phase 5 of 10</strong>
+        <span>Phases 0–5 complete · 6–9 planned</span>
+      </div>
+      <div class="progress-bar" role="progressbar" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">
+        <div class="seg-done" style="width:50%"></div>
+        <div class="seg-planned"></div>
+      </div>
+      <div class="phase-pills">
+        <span class="phase-pill done">0 Skeleton</span>
+        <span class="phase-pill done">1 CI</span>
+        <span class="phase-pill done">2 Dashboard</span>
+        <span class="phase-pill done">3 Postgres</span>
+        <span class="phase-pill done">4 Ingest</span>
+        <span class="phase-pill done">5 LLM pass-1</span>
+        <span class="phase-pill planned">6 Escalation</span>
+        <span class="phase-pill planned">7 Dual sink</span>
+        <span class="phase-pill planned">8 Tests</span>
+        <span class="phase-pill planned">9 Write-up</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <div class="nav-inner">
+    <a href="#files">1 · Files</a>
+    <a href="#layers">2 · Layers</a>
+    <a href="#ingest">3 · Ingest</a>
+    <a href="#reasoning">4 · Reasoning</a>
+    <a href="#pipeline">5 · Pipeline</a>
+    <a href="#provider">6 · LLM</a>
+    <a href="#domain">7 · Domain</a>
+    <a href="#lifecycle">8 · Lifecycle</a>
+    <a href="#journey">9 · Journey</a>
+    <a href="#cicd">10 · CI</a>
+    <a href="#endpoints">11 · Endpoints</a>
+    <a href="#roadmap">12 · Roadmap</a>
+  </div>
+</nav>
+
+<main>
+  <p class="legend">
+    <span><i style="background:var(--done-bg);border-color:var(--done)"></i> Built (Phases 0–5)</span>
+    <span><i style="background:var(--planned-bg);border-color:var(--planned)"></i> Planned (Phases 6–9)</span>
+    <span><i style="background:var(--partial-bg);border-color:var(--partial)"></i> Partial / stdout only</span>
+  </p>
+
+  <section id="files">
+    <div class="section-card">
+      <h2><span class="num">01</span> Project file structure <span class="tag done">built</span></h2>
+      <p class="desc">Actual repository layout. The web app lives in <code>app/triage/</code>; Connect pipeline config in <code>connect/</code>; schema and seeds in <code>db/</code>.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart TD
+  root["agentic-rd/"]
+  root --> app["app/ webapp"]
+  root --> db["db/ init.sql + seed.sql"]
+  root --> connect["connect/ wikipedia.yaml"]
+  root --> docs["docs/ PRD + TODO + decisions"]
+  root --> gh[".github/ workflows/ci.yml"]
+  root --> compose["docker-compose.yml"]
+  root --> arch["architecture.html"]
+
+  app --> pkg["triage/ package"]
+  app --> reqs["requirements.txt"]
+  app --> docker["Dockerfile python 3.12"]
+  app --> tests["tests/ pytest"]
+  pkg --> main["main.py compose root"]
+  pkg --> models["models.py EditView + Label"]
+  pkg --> repo["repository.py psycopg pool"]
+  pkg --> web["web.py routes + helpers"]
+  pkg --> render["render.py plain HTML escape"]
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  class app,pkg,main,models,repo,web,render,reqs,docker,tests,db,connect,compose,gh,docs,arch done;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="layers">
+    <div class="section-card">
+      <h2><span class="num">02</span> System layers overview</h2>
+      <p class="desc">End-to-end path: ingest, transform, classify, serve. Dashboard and Postgres are live; Connect classifies to stdout; topic and UPSERT sink arrive in Phase 7.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  subgraph src["Source"]
+    wiki["Wikipedia SSE firehose"]
+  end
+
+  subgraph ingest["Ingest + Transform — Connect"]
+    sse["http_client SSE"]
+    filt["Filter + project Bloblang"]
+  end
+
+  subgraph reason["Reasoning — Ollama"]
+    p1["Pass 1 classify"]
+    sw{"confidence low?"}
+    p2["Pass 2 escalate"]
+    ollama["Ollama local model"]
+  end
+
+  subgraph store["Storage"]
+    stdout["stdout temp sink"]
+    topic["topic wiki.edits.classified"]
+    pg[("Postgres classified_edits")]
+  end
+
+  subgraph serve["Serving — FastAPI"]
+    api["webapp"]
+    dash["Dashboard + api/edits"]
+  end
+
+  wiki --> sse --> filt --> p1
+  p1 --> ollama
+  p1 --> sw
+  sw -- yes --> p2 --> ollama
+  sw -- no --> stdout
+  p2 --> stdout
+  stdout -.planned.-> topic
+  topic -.planned.-> pg
+  pg --> api --> dash
+  pg -.seeds today.-> dash
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  classDef partial fill:#2563eb22,stroke:#2563eb,color:#2563eb;
+  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
+  class wiki,sse,filt,p1,ollama,api,dash,pg done;
+  class stdout partial;
+  class sw,p2,topic planned;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="ingest">
+    <div class="section-card">
+      <h2><span class="num">03</span> Ingest flow — Wikipedia SSE <span class="tag done">built</span></h2>
+      <p class="desc">Connect pulls the SSE stream, strips the <code>data:</code> prefix, fail-closes on heartbeats, filters to en.wikipedia article edits, and projects a clean schema.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  participant W as Wikipedia SSE
+  participant C as Connect http_client
+  participant B as Bloblang transform
+  participant L as LLM branch
+
+  C->>W: GET stream with User-Agent
+  W-->>C: text/event-stream frames
+  loop each line
+    C->>B: raw frame
+    B->>B: keep data prefix lines only
+    B->>B: parse_json catch deleted
+    alt heartbeat or non-JSON
+      B-->>C: drop fail-closed
+    else valid edit
+      B->>B: filter type edit bot false ns 0 en wiki
+      B->>B: project schema + size_delta int64
+      B->>B: epoch to ISO event_ts
+      B->>L: clean edit record
+    end
+  end
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="reasoning">
+    <div class="section-card">
+      <h2><span class="num">04</span> Multi-step LLM reasoning loop</h2>
+      <p class="desc">Pass 1 is live in <code>connect/wikipedia.yaml</code>. Phase 6 adds a confidence-gated escalation pass with richer context.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  participant E as Clean edit
+  participant B1 as branch pass 1
+  participant O as Ollama ollama_chat
+  participant P as Robust parse
+  participant S as switch confidence
+  participant B2 as branch pass 2
+  participant Sink as Sink topic + UPSERT
+
+  E->>B1: request_map title comment size_delta
+  B1->>O: chat completion JSON
+  O-->>B1: raw model text
+  B1->>P: extract first brace block
+  P->>P: normalize label to enum
+  P->>P: clamp confidence 0 to 1
+  P-->>S: label + confidence
+  alt confidence below threshold or unclear
+    S->>B2: escalate richer context
+    B2->>O: chat completion
+    O-->>B2: raw model text
+    B2->>P: reuse robust parse
+    P-->>Sink: escalated true
+  else high confidence
+    S-->>Sink: escalated false
+  end
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="pipeline">
+    <div class="section-card">
+      <h2><span class="num">05</span> Connect pipeline stages <span class="tag partial">pass-1 live</span></h2>
+      <p class="desc">Current config: input, three processor stages, stdout sink. Phase 6 adds switch + pass 2; Phase 7 replaces stdout with Kafka topic + Postgres UPSERT.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart TD
+  in["input http_client SSE lines scanner"]
+  d1["processor strip data prefix parse_json"]
+  d2["processor filter + project schema"]
+  br1["branch pass-1 ollama_chat"]
+  pr1["result_map graft label confidence"]
+  sw{"switch confidence threshold"}
+  br2["branch pass-2 escalate"]
+  pr2["result_map escalated true"]
+  out0["output stdout temp"]
+  out1["output kafka topic"]
+  out2["output sql_insert UPSERT"]
+
+  in --> d1 --> d2 --> br1 --> pr1 --> sw
+  pr1 --> out0
+  sw -- escalate --> br2 --> pr2
+  sw -- keep --> out1
+  pr2 --> out1
+  out1 --> out2
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  classDef partial fill:#2563eb22,stroke:#2563eb,color:#2563eb;
+  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
+  class in,d1,d2,br1,pr1 done;
+  class out0 partial;
+  class sw,br2,pr2,out1,out2 planned;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="provider">
+    <div class="section-card">
+      <h2><span class="num">06</span> LLM provider abstraction <span class="tag done">Ollama live</span></h2>
+      <p class="desc">Model access via Connect <code>ollama_chat</code>. Address and model name are env-configurable; host GPU override via <code>host.docker.internal</code>.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  branch["Connect branch"] --> chat["ollama_chat"]
+  chat -->|OLLAMA_ADDRESS| server["Ollama :11434"]
+  server -->|OLLAMA_MODEL| model["llama3.2 default"]
+  pull["ollama-pull one-shot"] -.gates.-> server
+  hosted["hosted LLM optional seam"] -.future.-> chat
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
+  class branch,chat,server,model,pull done;
+  class hosted planned;
+        </pre>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+classDiagram
+  class LlmCall {
+    +request_map prompt fields
+    +result_map graft onto record
+  }
+  class OllamaChat {
+    +server_address OLLAMA_ADDRESS
+    +model OLLAMA_MODEL
+    +response_format json
+    +chat prompt rawText
+  }
+  class OutputContract {
+    +label enum
+    +confidence number 0 to 1
+  }
+  LlmCall --> OllamaChat : invokes
+  OllamaChat --> OutputContract : parsed normalized
+  note for OutputContract "fixed enum only advisory output prompt-injection safe"
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="domain">
+    <div class="section-card">
+      <h2><span class="num">07</span> Domain model <span class="tag done">built</span></h2>
+      <p class="desc">Stable contract in <code>triage/models.py</code>. Shared by the dashboard, JSON API, and future pipeline UPSERT. <code>rev_id</code> is the natural PK.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+classDiagram
+  class EditView {
+    +int rev_id
+    +string title
+    +string editor
+    +string comment
+    +Label label
+    +float confidence
+    +bool escalated
+    +int size_delta
+    +string uri
+    +datetime event_ts
+    +datetime classified_at
+  }
+  class Label {
+    vandalism
+    substantive
+    trivia
+    unclear
+  }
+  class ClassifiedEditsTable {
+    +BIGINT rev_id PK
+    +CHECK label enum
+    +CHECK confidence 0 to 1
+    +INDEX event_ts DESC
+  }
+  EditView --> Label
+  EditView .. ClassifiedEditsTable : maps to
+  note for EditView "select_edits filters and sorts by confidence desc"
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="lifecycle">
+    <div class="section-card">
+      <h2><span class="num">08</span> Service lifecycle and startup ordering</h2>
+      <p class="desc">Compose gates services on healthchecks. Webapp serves a 503 warm-up page when Postgres is down; <code>/healthz</code> stays DB-independent.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+  [*] --> Building
+  Building --> Starting
+  Starting --> WarmingUp
+  WarmingUp --> Healthy: healthz 200
+  WarmingUp --> WarmingUp: DB not ready
+  Healthy --> Serving
+  Serving --> Degraded: Postgres transient down
+  Degraded --> Serving: pool recovers
+  Serving --> [*]: compose down
+        </pre>
+      </div>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  pg[("postgres healthy gate")] --> webapp["webapp :8080"]
+  ollama["ollama healthy"] --> pull["ollama-pull completed"]
+  pull --> connect["connect pipeline"]
+  connect --> pg
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  class pg,webapp,ollama,pull,connect done;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="journey">
+    <div class="section-card">
+      <h2><span class="num">09</span> End-to-end user journey</h2>
+      <p class="desc">Moderator flow from one command to triaging high-confidence vandalism edits. Live pipeline-to-dashboard path completes in Phase 7.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart TD
+  a["docker compose up"] --> b["Postgres seeds + webapp ready"]
+  b --> c["Connect ingests SSE firehose"]
+  c --> d["Ollama classifies each edit"]
+  d --> e["open localhost:8080"]
+  e --> f["table sorted by confidence desc"]
+  f --> g["filter vandalism chip"]
+  g --> h["click diff link on Wikipedia"]
+  h --> i["moderator acts advisory only"]
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  classDef partial fill:#2563eb22,stroke:#2563eb,color:#2563eb;
+  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
+  class a,b,e,f,g,h,i done;
+  class c,d partial;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="cicd">
+    <div class="section-card">
+      <h2><span class="num">10</span> CI pipeline <span class="tag done">built</span></h2>
+      <p class="desc">Six parallel jobs on push and PR from <code>.github/workflows/ci.yml</code>. Least-privilege <code>contents: read</code>.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart TD
+  push["push main or pull_request"] --> ci["ci.yml"]
+  ci --> lint["ruff check + format"]
+  ci --> yaml["yamllint"]
+  ci --> hado["hadolint Dockerfile"]
+  ci --> test["pytest in app/"]
+  ci --> build["docker compose build"]
+  ci --> leaks["gitleaks full history"]
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  class push,ci,lint,yaml,hado,test,build,leaks done;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="endpoints">
+    <div class="section-card">
+      <h2><span class="num">11</span> HTTP endpoints and topics map</h2>
+      <p class="desc">FastAPI routes in <code>triage/web.py</code>. No WebSocket surface. Kafka topic and live DB feed are Phase 7.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  subgraph http["FastAPI :8080"]
+    r1["GET / dashboard HTML"]:::done
+    r2["GET /api/edits label filter JSON"]:::done
+    r3["GET /healthz liveness 200"]:::done
+  end
+
+  subgraph pipeline["Connect output"]
+    stdout["stdout classified JSON"]:::partial
+    topic["wiki.edits.classified"]:::planned
+  end
+
+  subgraph db["Postgres"]
+    tbl["classified_edits UPSERT"]:::done
+    seed["seed.sql 5 rows today"]:::done
+  end
+
+  stdout -.Phase 7.-> topic
+  topic --> tbl
+  seed --> tbl
+  tbl --> r1
+  tbl --> r2
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  classDef partial fill:#2563eb22,stroke:#2563eb,color:#2563eb;
+  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="roadmap">
+    <div class="section-card">
+      <h2><span class="num">12</span> Phase roadmap</h2>
+      <p class="desc">Incremental build plan from <code>docs/TODO.md</code>. Each phase is independently runnable.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+flowchart LR
+  p0["0 Skeleton health"] --> p1["1 CI"]
+  p1 --> p2["2 Dashboard"]
+  p2 --> p3["3 Postgres serve"]
+  p3 --> p4["4 Connect ingest"]
+  p4 --> p5["5 LLM pass-1"]
+  p5 --> p6["6 Escalation loop"]
+  p6 --> p7["7 Dual sink UPSERT"]
+  p7 --> p8["8 Focused tests"]
+  p8 --> p9["9 Write-up polish"]
+
+  classDef done fill:#05966922,stroke:#059669,color:#059669;
+  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
+  class p0,p1,p2,p3,p4,p5 done;
+  class p6,p7,p8,p9 planned;
+        </pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>Generated from actual repo code, Compose, CI, and <code>docs/TODO.md</code>.</span>
+  <span>Mermaid 11 via CDN · <code>open architecture.html</code></span>
+</footer>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: dark ? "dark" : "default",
+    securityLevel: "loose",
+    flowchart: { useMaxWidth: false, htmlLabels: true, curve: "basis" },
+    sequence: { useMaxWidth: false, mirrorActors: false },
+    themeVariables: dark ? {
+      primaryColor: "#1e293b",
+      primaryTextColor: "#f1f5f9",
+      primaryBorderColor: "#475569",
+      lineColor: "#64748b",
+      secondaryColor: "#0f172a",
+      tertiaryColor: "#1a0f0f",
+    } : {
+      primaryColor: "#fef2f2",
+      primaryTextColor: "#0f172a",
+      primaryBorderColor: "#fca5a5",
+      lineColor: "#64748b",
+      secondaryColor: "#f8fafc",
+      tertiaryColor: "#eef2ff",
+    },
+  });
+
+  // Active nav on scroll
+  const sections = [...document.querySelectorAll("section[id]")];
+  const links = [...document.querySelectorAll("nav.toc a")];
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) {
+          links.forEach((a) => a.classList.toggle("active", a.getAttribute("href") === "#" + e.target.id));
+        }
+      });
+    },
+    { rootMargin: "-40% 0px -50% 0px" }
+  );
+  sections.forEach((s) => observer.observe(s));
+
+  // Re-theme on system preference change
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => location.reload());
+</script>
+</body>
+</html>
