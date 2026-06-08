@@ -271,3 +271,19 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** With the host override, `ollama-pull` sets `OLLAMA_HOST=http://host.docker.internal:11434` but, lacking the host mapping, couldn't resolve the name (`could not connect to ollama server`), failed `exit 1`, and — because `connect` gates on `service_completed_successfully` — blocked the whole pipeline. The Phase 5 host-override decision mapped only `connect`; this completes it so the documented one-command host path actually starts end-to-end on Colima/Linux (where `host.docker.internal` isn't automatic). Harmless on the in-container default (the mapping is simply unused).
 - **Made by:** Agent
 - **Date:** 2026-06-07
+
+### Developer Makefile for the compose + test loop
+- **Decision:** Add a root `Makefile` wrapping the recurring workflow: service control (`up`/`down`/`down-v`/`restart`/`restart-connect [THRESHOLD=]`/`restart-webapp`/`ps`/`build`), pipeline observability (`logs-connect`/`diffs`/`labels`/`escalations`/`errors`/`psql`/`ollama-check`), and quality (`install`/`test`/`lint`/`fmt`/`yamllint`/`connect-lint`/`check`). `check` mirrors CI minus build/gitleaks.
+- **Alternatives:** Shell scripts under `scripts/`; document raw commands only; a task runner (`just`/`task`).
+- **Rationale / trade-offs:** A Makefile is ubiquitous (no extra install), self-documents via `make help`, and captures the exact error-prone commands (esp. `restart-connect THRESHOLD=…` and the log-grep helpers) surfaced while debugging Phase 6. Pure convenience — no runtime surface; the underlying `docker compose`/`pytest`/`ruff` paths still work directly.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+## Phase 7 — Dual sink end-to-end + connector hardening (planning)
+
+### Model audit log as a full Redpanda topic (not a Postgres table or logs)
+- **Decision:** Plan a dedicated **append-only** `model.audit` topic as a second fan-out output capturing one record per edit with both passes' raw model I/O (`{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2|null}`); short **time-based retention**, **not compacted**, keyed by `rev_id`. Capture each pass's input/raw response in metadata during its `branch`, reshape in the audit output's `processors`. Defer any sync to a `model_calls` table to later.
+- **Alternatives:** Structured `log` lines only (cheapest, no infra); a `model_calls` Postgres audit table (queryable, reuses the DB); one-record-per-call (vs per-edit-with-nested-passes); a compacted/keyed-LWW topic (rejected — collapses history).
+- **Rationale / trade-offs:** The brief's storage is already a stream + DB, and an audit *stream* fits replay / prompt-eval / drift-inspection and the "explain why this label" story better than rows; the human chose it explicitly and is fine syncing to a table later (a Kafka→Postgres sink is trivial to add). Append-only + time-retention is correct because every call is a distinct event (unlike the LWW-by-`rev_id` classified topic). Per-edit-with-nested-passes keeps escalation linked to its pass-1 in one message and avoids splitting into two. Marked an **Extension** (beyond the brief's asked scope) so it doesn't bloat the core ingest→reason→serve path. Caveats: stores full prompts + raw responses incl. the (capped) diff — volume/retention matters, and the prompts hold untrusted title/comment/diff (advisory, local-only).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
