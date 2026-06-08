@@ -294,3 +294,17 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** The payloads are text JSON + wikitext diffs, which compress ~5-10x; at post-filter throughput (~1-5 edits/sec, doubled by escalation) CPU isn't the bottleneck, so we optimize for ratio with `zstd`. Compression operates per-batch, so it synergizes with the planned batching (bigger batches → better ratio) and directly offsets the audit topic's volume/retention cost. It is transparent to consumers and Console (standard Kafka batch compression). Trade-off: a little producer CPU; tiny batches compress less (fine at this steady, modest volume).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
+
+### (Implemented) Broker = Redpanda dev-container; `redpanda` output + Console; explicit topic creation
+- **Decision:** Add `redpanda` (single-node `--mode dev-container`), `console` (host `:8090`), and a one-shot `redpanda-topics` job that `rpk topic create`s both topics with explicit configs (`wiki.edits.classified` `cleanup.policy=compact`; `model.audit` `cleanup.policy=delete` + `retention.ms=6h`). Connect produces via its native `redpanda` output and gates on the broker healthy + topics created.
+- **Alternatives:** `kafka`/`kafka_franz` outputs; rely on `allow_auto_topic_creation` (default true) instead of an init job; skip Console.
+- **Rationale / trade-offs:** The `redpanda` output is the current franz-go-based client (vs the legacy `kafka`). Explicit creation lets us set compaction/retention deliberately — auto-create would give default (delete) policy, losing the compacted-by-`rev_id` semantics that mirror the UPSERT. Console satisfies the brief's "somewhere we can see it" and makes the topics browsable; it maps to `:8090` to avoid the dashboard's `:8080`. Pinned tags (`redpanda:v25.3.15`, `console:v3.7.4`) per the repo's pinned-image rule.
+- **Made by:** Agent
+- **Date:** 2026-06-08
+
+### (Implemented) Dual sink via broker `fan_out`: `redpanda` topic + `sql_raw` UPSERT (wrapped in `retry`)
+- **Decision:** Replace the stdout sink with an `output.broker` `fan_out` to: (1) `wiki.edits.classified` (`redpanda`, key `rev_id`), (2) Postgres via `sql_raw` `INSERT ... ON CONFLICT (rev_id) DO UPDATE` wrapped in a `retry` output, and (3) the `model.audit` topic. `classified_at = now()` is stamped on write.
+- **Alternatives:** App-side consumer reading the topic and writing Postgres itself (vs Connect as the sink); `sql_insert` (no upsert); no `retry` wrapper; `fan_out_sequential`.
+- **Rationale / trade-offs:** Connect as the sink keeps everything in one config with no extra service to run — and directly feeds the brief's "Connect as the sink vs app-side writes" tradeoff. UPSERT requires `sql_raw` (the `sql_insert` output has no `ON CONFLICT`). Wrapping the SQL output in `retry` isolates transient Postgres downtime so it's retried, not fatal. Known `fan_out` caveat: if one output fails, the message is retried to *all* outputs, which can re-produce to Kafka — acceptable here because the classified topic is compacted by `rev_id` and the Postgres UPSERT is idempotent, so duplicates converge.
+- **Made by:** Agent
+- **Date:** 2026-06-08

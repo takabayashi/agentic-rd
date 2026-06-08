@@ -176,22 +176,22 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > Goal: persist durably and stream; make the connector production-shaped
 > (retries, batching, useful logs). Removes the temporary stdout.
 
-- [ ] `broker` fan-out: Kafka topic `wiki.edits.classified` (key = `rev_id`)
-- [ ] Routing note: ONE labeled topic (`label` column) + the confidence `switch` is the routing logic (not topic-per-label) — stated so the brief's "route" requirement is traceable
-- [ ] `sql_insert` to `classified_edits` with `ON CONFLICT (rev_id) DO UPDATE` (UPSERT); stamp `classified_at`; remove the temporary `stdout`
-- [ ] Connector hardening: retry/backoff + batching + `compression: zstd` on the topic outputs (per-batch, so it pairs with batching — bigger batches → better ratio; transparent to consumers/Console); healthcheck-gated `depends_on`; tune the Connect logger to useful, non-spammy output
-- [ ] **(Extension) Model audit topic** `model.audit` (append-only, short time-retention — *not* compacted; key = `rev_id`): a second fan-out output capturing one record per edit with both passes' raw model I/O — `{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2{…}|null}`. Stash each pass's input/raw response in metadata during its `branch`, reshape in the audit output's `processors`. For replay / prompt-eval / drift inspection; sync to a `model_calls` table later if needed. Cap stored diff size; note prompts hold untrusted title/comment/diff.
-- [ ] **Security:** DSN from env; explicit `sslmode`; no creds in logs
-- [ ] **Docs:** document the topic(s), browsing them in Console, and how UPSERT corrects cold-start `unclear` rows
+- [x] `broker` fan-out: Redpanda topic `wiki.edits.classified` (key = `rev_id`, compacted) via the native `redpanda` output; broker + Console (`:8090`) + `redpanda-topics` one-shot added to compose
+- [x] Routing note: ONE labeled topic (`label` field) + the confidence `switch` is the routing logic (not topic-per-label) — stated so the brief's "route" requirement is traceable
+- [x] `sql_raw` to `classified_edits` with `ON CONFLICT (rev_id) DO UPDATE` (UPSERT, `sql_insert` can't); stamp `classified_at`; wrapped in `retry`; removed the temporary `stdout`
+- [x] Connector hardening: `retry` on the SQL sink + batching + `compression: zstd` on the topic outputs (per-batch, so it pairs with batching — bigger batches → better ratio; transparent to consumers/Console); healthcheck-gated `depends_on`
+- [x] **(Extension) Model audit topic** `model.audit` (append-only, ~6h retention — *not* compacted; key = `rev_id`): a second fan-out output capturing one record per edit with both passes' raw model I/O — `{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2{…}|null}`. Raw responses stashed in metadata during each `branch`, reshaped in the audit output's `processors`. For replay / prompt-eval / drift inspection; sync to a `model_calls` table later if needed.
+- [x] **Security:** DSN from env (built from `POSTGRES_*`); explicit `sslmode=disable` (local); no creds in logs
+- [x] **Docs:** document the topic(s), browsing them in Console, and how UPSERT corrects cold-start `unclear` rows
 
 **Acceptance criteria**
-- [ ] Fresh `docker compose up` fills the dashboard with live classified edits
-- [ ] Messages appear on `wiki.edits.classified` (keyed by `rev_id`) in Console
-- [ ] Re-processing a `rev_id` updates the existing row (no PK collision/duplicate)
-- [ ] A first-pass `unclear` row is later corrected by an UPSERT (no permanently stuck rows)
-- [ ] Logs clearly show ingest → classify → sink without flooding; transient Postgres/Ollama downtime is retried, not fatal
-- [ ] (Extension) Each classified edit emits an audit record on `model.audit` carrying both passes' raw input/output; topic uses time-retention (no compaction)
-- [ ] Topic outputs use `zstd` compression (observable via reduced on-disk size / batch compression in Console or Redpanda metrics)
+- [x] Fresh `docker compose up` fills the dashboard with live classified edits
+- [x] Messages appear on `wiki.edits.classified` (keyed by `rev_id`) in Console
+- [x] Re-processing a `rev_id` updates the existing row (no PK collision/duplicate)
+- [x] A first-pass `unclear` row is later corrected by an UPSERT (no permanently stuck rows)
+- [x] Logs clearly show ingest → classify → sink without flooding; transient Postgres/Ollama downtime is retried, not fatal
+- [x] (Extension) Each classified edit emits an audit record on `model.audit` carrying both passes' raw input/output; topic uses time-retention (no compaction)
+- [x] Topic outputs use `zstd` compression (observable via reduced on-disk size / batch compression in Console or Redpanda metrics)
 
 ## Phase 8 — Focused automated tests
 

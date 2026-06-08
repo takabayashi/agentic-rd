@@ -135,9 +135,15 @@ pipeline:
           let blob = content().string().re_find_all("(?s)\\{.*\\}").index(0).or("{}")
           let parsed = $blob.parse_json().catch({})
           let label = $parsed.label.or("").string().trim().lowercase()
-          root.label = if ["vandalism", "substantive", "trivia", "unclear"].contains($label) { $label } else { "unclear" }
+          let nlabel = if ["vandalism", "substantive", "trivia", "unclear"].contains($label) { $label } else { "unclear" }
+          root.label = $nlabel
           let c = $parsed.confidence.or(0).number().catch(0)
-          root.confidence = if $c < 0 { 0 } else if $c > 1 { 1 } else { $c }
+          let nconf = if $c < 0 { 0 } else if $c > 1 { 1 } else { $c }
+          root.confidence = $nconf
+          # Stash raw response + normalized pass-1 result for the audit topic.
+          meta pass1_raw = content().string()
+          meta pass1_label = $nlabel
+          meta pass1_confidence = $nconf
     # 5b) Fail-safe default. If the pass-1 `branch` could not classify (the LLM
     #     was unreachable or the call errored), Connect passes the record through
     #     WITHOUT applying result_map, so it would have no label/confidence —
@@ -207,9 +213,73 @@ pipeline:
                   let c = $parsed.confidence.or(0).number().catch(0)
                   root.confidence = if $c < 0 { 0 } else if $c > 1 { 1 } else { $c }
                   root.escalated = true
+                  meta pass2_raw = content().string()
 
 output:
-  stdout: {}
+  # Dual sink fan-out: stream to a Redpanda topic AND UPSERT into Postgres, plus
+  # an append-only model-audit topic. zstd compression + batching on the topic
+  # outputs; the SQL sink is wrapped in retry so transient Postgres downtime is
+  # retried, not fatal.
+  broker:
+    pattern: fan_out
+    outputs:
+      # 1) Stream: the classified edit, keyed by rev_id (compacted topic = LWW).
+      - redpanda:
+          seed_brokers: ["${REDPANDA_BROKERS}"]
+          topic: wiki.edits.classified
+          key: ${! this.rev_id.string() }
+          compression: zstd
+          batching:
+            count: 50
+            period: 1s
+      # 2) Serve: UPSERT so re-processed / late rows converge to one correct row
+      #    (a cold-start `unclear` is corrected in place by a later pass).
+      - retry:
+          output:
+            sql_raw:
+              driver: postgres
+              dsn: ${POSTGRES_DSN}
+              query: |
+                INSERT INTO classified_edits
+                  (rev_id, title, editor, comment, label, confidence, escalated, size_delta, uri, event_ts, classified_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+                ON CONFLICT (rev_id) DO UPDATE SET
+                  title = EXCLUDED.title, editor = EXCLUDED.editor, comment = EXCLUDED.comment,
+                  label = EXCLUDED.label, confidence = EXCLUDED.confidence, escalated = EXCLUDED.escalated,
+                  size_delta = EXCLUDED.size_delta, uri = EXCLUDED.uri, event_ts = EXCLUDED.event_ts,
+                  classified_at = now()
+              args_mapping: |
+                root = [
+                  this.rev_id, this.title, this.editor, this.comment, this.label,
+                  this.confidence, this.escalated, this.size_delta, this.uri, this.event_ts,
+                ]
+              max_in_flight: 4
+              batching:
+                count: 20
+                period: 1s
+      # 3) Audit: full model I/O per edit (append-only, short-retention topic).
+      - redpanda:
+          seed_brokers: ["${REDPANDA_BROKERS}"]
+          topic: model.audit
+          key: ${! this.rev_id.string() }
+          compression: zstd
+          batching:
+            count: 50
+            period: 1s
+        processors:
+          - mapping: |
+              root = {
+                "rev_id": this.rev_id,
+                "model": env("OLLAMA_MODEL").or("unknown"),
+                "ts": now(),
+                "pass1": {
+                  "input": {"title": this.title, "comment": this.comment, "size_delta": this.size_delta, "diff": meta("diff").or("")},
+                  "raw_response": meta("pass1_raw").or(""),
+                  "label": meta("pass1_label").or(""),
+                  "confidence": meta("pass1_confidence").or(0).number().catch(0),
+                },
+                "pass2": if this.escalated { {"raw_response": meta("pass2_raw").or(""), "label": this.label, "confidence": this.confidence} } else { null },
+              }
 
 rate_limit_resources:
   # Be a polite Wikipedia API citizen: cap the diff-fetch call rate.

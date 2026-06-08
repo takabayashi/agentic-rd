@@ -7,12 +7,12 @@ triages each edit with a multi-step LLM reasoning loop (Redpanda Connect +
 Ollama), and serves the results on a live dashboard. Built for the Redpanda
 Field Deployed Engineer build exercise.
 
-> Status: **Phase 6** — a Redpanda Connect pipeline ingests and transforms the
-> live Wikipedia firehose, fetches each edit's real diff, and classifies it with
-> a local Ollama model (pass-1 `{label, confidence}`) plus a confidence-based
-> escalation pass for ambiguous edits — currently to stdout; the dashboard still
-> serves seeded Postgres rows. The topic/UPSERT sink lands in Phase 7 (see
-> [`docs/TODO.md`](docs/TODO.md)).
+> Status: **Phase 7** — end-to-end. A Redpanda Connect pipeline ingests and
+> transforms the live Wikipedia firehose, fetches each edit's real diff,
+> classifies it with a local Ollama model (pass-1 + confidence-based escalation),
+> then **fans out** to a Redpanda topic (`wiki.edits.classified`), a Postgres
+> UPSERT (the dashboard's source), and an append-only model-audit topic
+> (`model.audit`). Browse the topics in Console at <http://localhost:8090>.
 
 ## Run
 
@@ -121,17 +121,17 @@ Key choices:
   event_ts`; `size_delta = length.new - length.old`; the epoch `timestamp` is
   formatted to an ISO-8601 string (TIMESTAMPTZ-safe), falling back to `meta.dt`.
 
-The pipeline currently sinks to **stdout** only; the topic + Postgres UPSERT
-sink arrives in Phase 7. Dedup is deferred to the Postgres `rev_id` UPSERT (an
-SSE stream rarely re-sends a `rev_id`; reconnect replays are absorbed by the
-UPSERT), so no in-pipeline cache is needed.
+Dedup is handled durably by the Postgres `rev_id` UPSERT (an SSE stream rarely
+re-sends a `rev_id`; reconnect replays are absorbed by the UPSERT), so no
+in-pipeline cache is needed. The sink is covered below.
 
 ## Classification (diff-enriched, two-pass)
 
 Each surviving edit is enriched with its **actual diff** and classified by a
 **local Ollama model** through Connect `branch`es (in
-[`connect/wikipedia.yaml`](connect/wikipedia.yaml)). The dashboard isn't wired to
-these results yet (that's the Phase 7 sink) — watch them on stdout:
+[`connect/wikipedia.yaml`](connect/wikipedia.yaml)). Results are persisted to
+Postgres (and streamed to a topic — see "Sink" below); watch them flow on stdout
+logs too:
 
 ```bash
 docker compose logs -f connect   # each line carries label + confidence + escalated
@@ -215,6 +215,42 @@ OLLAMA_ADDRESS=http://host.docker.internal:11434 docker compose up
   classification is advisory only. No edit data is sent to any third-party model
   (inference is local); the only outbound calls are the public Wikipedia SSE feed
   and the read-only diff fetch (which sends just revision ids).
+
+## Sink: topics, Console & UPSERT
+
+Phase 7 replaces the temporary stdout with a `broker` fan-out (in
+[`connect/wikipedia.yaml`](connect/wikipedia.yaml)) to three destinations:
+
+- **`wiki.edits.classified`** — Redpanda topic, keyed by `rev_id`, `zstd`,
+  batched: the stream of classified edits. The topic is **compacted**, so it
+  keeps the last value per `rev_id` (matching the UPSERT's last-write-wins).
+- **Postgres `classified_edits`** via `sql_raw` **UPSERT**
+  (`INSERT ... ON CONFLICT (rev_id) DO UPDATE`) — the dashboard's source. A row
+  first written `unclear` on a cold-start/transient failure is corrected in
+  place by a later, more confident pass; re-processing a `rev_id` updates the
+  row instead of duplicating it. The SQL output is wrapped in `retry`, so a
+  transient Postgres outage is retried, not fatal.
+- **`model.audit`** — Redpanda topic, append-only, ~6h retention, `zstd`: one
+  record per edit with both passes' raw model I/O
+  (`{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2|null}`)
+  for replay / prompt-eval / drift inspection. Captured from branch metadata; it
+  is *not* persisted to Postgres (a `model_calls` table sync is left for later).
+
+Browse the topics in **Console** at <http://localhost:8090>, or from the CLI:
+
+```bash
+docker compose exec redpanda rpk topic consume wiki.edits.classified --num 5
+docker compose exec redpanda rpk topic consume model.audit --num 2
+```
+
+- **Routing.** The brief's "route" requirement is met by the confidence `switch`
+  (routing ambiguous edits to the escalation pass) plus a single labeled topic
+  (the `label` field) — a deliberate choice over topic-per-label.
+- **Compression.** Producer-side `zstd` on the topic outputs (text JSON +
+  wikitext diffs compress well), paired with batching for a better ratio;
+  transparent to Console/consumers.
+
+Ports: dashboard `8080`, Console `8090`.
 
 ## Develop / test
 
