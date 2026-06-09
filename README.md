@@ -307,11 +307,9 @@ make check     # full local CI mirror (lint + connect-lint + test)
 | Dashboard & API | `tests/test_dashboard.py` | label + escalated filters, JSON shape, empty state, 503 warm-up, XSS escape on title |
 | Health | `tests/test_health.py` | `/healthz` liveness |
 | Repository | `tests/test_repository.py` | parameterized `LIMIT %s`, `DatabaseUnavailable` mapping |
-| Pipeline parse | `tests/test_pipeline_parse.py` + `triage/pipeline_parse.py` | dirty JSON → first `{...}`, enum drift → `unclear`, confidence clamp, SSE heartbeat dropped |
 
-`pipeline_parse.py` mirrors the Bloblang in `connect/ingest.yaml` and
-`connect/classify.yaml` so the gnarly parse logic is asserted in Python without
-a Connect test harness. Connect remains the runtime source of truth.
+Connect Bloblang (SSE fail-closed, LLM parse/normalize) is validated by
+`make connect-lint` and live e2e runs — not duplicated in Python.
 
 Layout:
 

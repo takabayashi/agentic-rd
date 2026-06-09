@@ -223,7 +223,7 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > Goal: lock in the gnarly bits (parsing/edge cases) without a heavy harness.
 
 - [x] App unit tests: label filter, parameterized query, JSON serialization, empty + 503 states, and HTML-escapes-a-malicious-`<script>` title
-- [x] Parse/normalize tests for the agent's robust-output logic: dirty-JSON → first `{...}`, enum-drift → `unclear`, heartbeat dropped (not passed through)
+- [x] Connect parse/normalize: `connect-lint` + e2e (no Python mirror — avoids drift with Bloblang)
 - [x] Wire tests into the CI `test` job (+ `connect-lint` job for pipeline YAMLs)
 - [x] **Security:** the escaping test doubles as an XSS regression guard
 - [x] **Docs:** README "Testing" section — how to run + what's covered
@@ -233,8 +233,8 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 - [ ] CI fails if any test fails (verify with a temporary deliberate break, then revert)
 
 > Full Redpanda Connect test-harness coverage of every Bloblang mapping is
-> **optional** (listed in Out of scope) — the parse/normalize tests cover the
-> highest-risk logic at app level.
+> **optional** (listed in Out of scope) — `connect-lint` + e2e cover pipeline
+> logic; pytest covers the web app only.
 
 ## Phase 9 — Required write-up & repro polish *(deliverable)*
 

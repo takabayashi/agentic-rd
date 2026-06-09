@@ -332,6 +332,13 @@ entries reference the ones they replace).
 - **Made by:** Agent
 - **Date:** 2026-06-08
 
+### Drop `pipeline_parse.py` — Connect YAML is the sole parse source of truth
+- **Decision:** Remove `app/triage/pipeline_parse.py` and `test_pipeline_parse.py`. Keep dashboard/repository pytest + `connect-lint` CI + e2e for pipeline parse rules.
+- **Alternatives:** Keep the Python mirror; inline test helpers only; full Connect test corpus.
+- **Rationale / trade-offs:** The module was never used at runtime — only tests imported it — so it duplicated Bloblang with real drift risk and no product benefit. App tests should guard the app; Connect lint + live pipeline guard ingest/classify. Supersedes the "Python reference parse module" entry above.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
 ## Phase 10 — Staged Connect pipeline (topics as protocol)
 
 ### Split monolith into three Connect services on compacted topics

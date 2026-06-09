@@ -4,5 +4,6 @@ psycopg[binary]==3.3.4
 psycopg-pool==3.3.1
 
 # Test-only (kept here so the CI test job and `docker compose run` share one pin set)
-httpx==0.28.1
+# Starlette 1.2+ TestClient expects httpx2 (not httpx) — avoids StarletteDeprecationWarning.
+httpx2==2.3.0
 pytest==9.0.3
