@@ -411,10 +411,10 @@ app/
     schema.py        # SQLAlchemy table = Alembic schema source  (data)
     repository.py    # Postgres access: get_recent_edits, check_ready  (data)
     web.py           # HTTP layer: dashboard, /fragment/edits, /api/edits, /healthz, /readyz, /metrics
-    render.py        # plain-Python HTML rendering + live-feed poller
-    styles.py        # extracted CSS constants
+    render.py        # plain-Python HTML rendering (links the static assets)
     metrics.py       # Prometheus middleware + /metrics payload
     logging_config.py # one-line JSON logging
+  static/            # dashboard assets served at /static (dashboard.css/js, warmup.css)
   migrations/        # Alembic env + versions/ (forward schema evolution)
   tests/             # pytest suite + sample_data fixture
   Dockerfile

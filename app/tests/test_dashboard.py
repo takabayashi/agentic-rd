@@ -103,9 +103,22 @@ def test_fragment_edits_returns_table_html():
 def test_dashboard_has_live_feed_poller():
     html = client.get("/").text
     assert 'id="feed"' in html
-    assert "/fragment/edits" in html
+    # The poller JS lives in a static asset now; the page links it and passes
+    # the refresh interval via the body data attribute.
+    assert '<script src="/static/dashboard.js"' in html
+    assert "data-refresh-ms=" in html
+    assert '<link rel="stylesheet" href="/static/dashboard.css"' in html
     # The full-page meta-refresh is gone; updates come from the poller.
     assert 'http-equiv="refresh"' not in html
+
+
+def test_static_assets_served():
+    css = client.get("/static/dashboard.css")
+    assert css.status_code == 200 and "text/css" in css.headers["content-type"]
+    js = client.get("/static/dashboard.js")
+    assert js.status_code == 200
+    # The row-rendering logic stayed server-side; the client only swaps fragments.
+    assert "/fragment/edits" in js.text and "/fragment/rows" in js.text
 
 
 def test_api_edits_escalated_filter(monkeypatch):

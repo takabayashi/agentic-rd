@@ -9,7 +9,9 @@ through ``_esc`` (and links are only emitted for http(s) URIs).
 Live updates use a tiny vanilla-JS poller (no external library, no build step)
 that re-fetches the server-rendered ``#feed`` fragment every few seconds and
 swaps it in, flashing newly-arrived rows. The server stays the single source of
-markup — the client never re-implements row rendering.
+markup — the client never re-implements row rendering. The dashboard CSS/JS are
+served as real files from ``app/static`` (mounted at ``/static`` in ``main``);
+this module only emits the markup that links them.
 """
 
 import html
@@ -18,85 +20,11 @@ from urllib.parse import quote
 
 from .config import get_settings
 from .models import EditView
-from .styles import DASHBOARD_CSS, WARMUP_CSS
 
-# Seconds between live-feed refreshes (client-side poll interval).
+# Seconds between live-feed refreshes. Passed to the static dashboard.js via a
+# ``data-refresh-ms`` body attribute so the value stays owned here in Python
+# while the script remains a cacheable static asset.
 _REFRESH_SECONDS = 5
-
-# Live poll refreshes the top page (newest rows); an IntersectionObserver
-# appends older pages as the user scrolls. The poll only swaps the dynamic
-# region *above* the table body so appended rows survive a refresh; new rows
-# arriving at the top flash. Both talk to /fragment/edits (server-rendered).
-_POLL_JS = """
-(function () {
-  var FEED = document.getElementById('feed');
-  var LIVE = document.getElementById('live');
-  var INTERVAL = __REFRESH_MS__;
-  var loading = false;
-
-  function tbody() { return FEED.querySelector('tbody'); }
-  function sentinel() { return FEED.querySelector('#scroll-sentinel'); }
-  function search() { return window.location.search; }
-
-  // --- Infinite scroll: append the next page of older rows. ---
-  function loadMore() {
-    var s = sentinel();
-    if (loading || !s) return;
-    var off = s.dataset.next;
-    if (!off) return;
-    loading = true;
-    var sep = search() ? '&' : '?';
-    fetch('/fragment/rows' + search() + sep + 'offset=' + off, { headers: { 'X-Requested-With': 'fetch' } })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-      .then(function (html) {
-        var tb = tbody();
-        if (!tb) return;
-        s.remove();
-        tb.insertAdjacentHTML('beforeend', html);
-        loading = false;
-        observe();
-      })
-      .catch(function () { loading = false; });
-  }
-
-  var io = ('IntersectionObserver' in window)
-    ? new IntersectionObserver(function (entries) {
-        if (entries.some(function (e) { return e.isIntersecting; })) loadMore();
-      }, { rootMargin: '400px' })
-    : null;
-
-  function observe() {
-    var s = sentinel();
-    if (s && io) io.observe(s);
-  }
-
-  // --- Live poll: refresh the dynamic region (stats + filters + first page). ---
-  function knownRevs() {
-    var s = {};
-    FEED.querySelectorAll('tr[data-rev]').forEach(function (tr) { s[tr.dataset.rev] = 1; });
-    return s;
-  }
-
-  function tick() {
-    if (document.hidden) return;
-    var before = knownRevs();
-    fetch('/fragment/edits' + search(), { headers: { 'X-Requested-With': 'fetch' } })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-      .then(function (html) {
-        FEED.innerHTML = html;
-        FEED.querySelectorAll('tr[data-rev]').forEach(function (tr) {
-          if (!before[tr.dataset.rev]) tr.classList.add('new');
-        });
-        if (LIVE) LIVE.classList.remove('off');
-        observe();
-      })
-      .catch(function () { if (LIVE) LIVE.classList.add('off'); });
-  }
-
-  observe();
-  setInterval(tick, INTERVAL);
-})();
-""".replace("__REFRESH_MS__", str(_REFRESH_SECONDS * 1000))
 
 
 def _esc(value: object) -> str:
@@ -323,16 +251,16 @@ def render_dashboard(
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Edit Triage{title_suffix}</title>
-  <style>{DASHBOARD_CSS}</style>
+  <link rel="stylesheet" href="/static/dashboard.css" />
 </head>
-<body>
+<body data-refresh-ms="{_REFRESH_SECONDS * 1000}">
   <header>
     <h1>Wikipedia Edit Triage <span id="live" class="live" title="live feed"></span></h1>
   </header>
   <div id="feed">
     {feed}
   </div>
-  <script>{_POLL_JS}</script>
+  <script src="/static/dashboard.js" defer></script>
 </body>
 </html>
 """
@@ -344,9 +272,9 @@ def render_warming_up() -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="refresh" content="5" />
+  <meta http-equiv="refresh" content="{_REFRESH_SECONDS}" />
   <title>Warming up…</title>
-  <style>{WARMUP_CSS}</style>
+  <link rel="stylesheet" href="/static/warmup.css" />
 </head>
 <body>
   <div class="card">
