@@ -1,0 +1,56 @@
+# Connect enrich: wiki.edits.raw -> diff fetch -> wiki.edits.enriched
+#
+# Stage 2 of the staged pipeline. Consumes projected edits, fetches the real
+# diff from the MediaWiki compare API (fail-closed), grafts it into the JSON
+# payload, and produces to a compacted topic keyed by rev_id.
+
+input:
+  redpanda:
+    seed_brokers: ["${REDPANDA_BROKERS}"]
+    topics: [wiki.edits.raw]
+    consumer_group: wiki-enrich
+
+pipeline:
+  processors:
+    - branch:
+        request_map: |
+          root.from = this.parent_rev
+          root.to = this.rev_id
+        processors:
+          - http:
+              url: https://en.wikipedia.org/w/rest.php/v1/revision/${! this.from }/compare/${! this.to }
+              verb: GET
+              headers:
+                User-Agent: ${WIKI_USER_AGENT}
+              timeout: 5s
+              retries: 2
+              rate_limit: wiki_api
+        result_map: |
+          let body = content().string().parse_json().catch({})
+          let changed = $body.diff.or([]).filter(d -> d.type != 0)
+          let lines = $changed.map_each(d -> (if d.type == 1 { "+ " } else if d.type == 2 { "- " } else { "~ " }) + d.text.or(""))
+          let text = $lines.join("\n").catch("")
+          root.diff = if $text.length() > 4000 { $text.slice(0, 4000) } else { $text }
+    - log:
+        level: INFO
+        message: 'diff fetched rev_id=${! this.rev_id } diff_chars=${! this.diff.or("").length() }'
+
+output:
+  redpanda:
+    seed_brokers: ["${REDPANDA_BROKERS}"]
+    topic: wiki.edits.enriched
+    key: ${! this.rev_id.string() }
+    compression: zstd
+    batching:
+      count: 50
+      period: 1s
+
+rate_limit_resources:
+  - label: wiki_api
+    local:
+      count: 10
+      interval: 1s
+
+logger:
+  level: INFO
+  format: logfmt

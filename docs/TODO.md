@@ -200,6 +200,24 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > filter (also `/api/edits?escalated=1`), and per-row article + diff links + rev
 > id. All logged in `docs/decisions.md`.
 
+## Phase 10 — Staged Connect pipeline (topics as protocol)
+
+> Goal: split the monolithic Connect job into three services that communicate via
+> compacted Kafka topics; classify remains the Connect-based agent (Ollama).
+
+- [x] `connect/ingest.yaml`: SSE → filter/project → `wiki.edits.raw` (`parent_rev` in payload)
+- [x] `connect/enrich.yaml`: consume raw → diff fetch → `wiki.edits.enriched` (`diff` in payload)
+- [x] `connect/classify.yaml`: consume enriched → pass-1 + escalation → fan-out sink (strip handoff fields before Postgres)
+- [x] `docker-compose.yml`: `connect-ingest`, `connect-enrich`, `connect-classify`; create `wiki.edits.raw` + `wiki.edits.enriched` topics
+- [x] `Makefile`: lint/logs/restart/consume targets for all three services
+- [x] **Docs:** decision entry, README architecture, requirements Flow 2, `.env.example` service scoping
+
+**Acceptance criteria**
+- [x] `docker compose up` brings up all three Connect services; `make topics` lists four topics
+- [x] `make consume-raw` / `consume-enriched` / `consume-classified` show records at each stage
+- [x] Dashboard fills with live classified edits; UPSERT still dedupes by `rev_id`
+- [x] `make check` passes (lint all three YAMLs + pytest)
+
 ## Phase 8 — Focused automated tests
 
 > Goal: lock in the gnarly bits (parsing/edge cases) without a heavy harness.

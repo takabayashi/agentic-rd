@@ -78,22 +78,21 @@ Described from the user's perspective:
    Wikipedia and take action.
 
 ### Flow 2 — The agent reasoning loop (per edit, internal)
-1. **Ingest**: edit arrives via SSE (`http_client`, `stream.enabled: true`,
-   `lines` scanner); `data:` prefix is stripped; non-JSON heartbeats are dropped
-   (fail-closed, not passed through as raw strings).
-2. **Filter/project**: drop `bot == true`, drop non-`type=edit`, keep only the
-   main article namespace (`namespace == 0`), and scope to English Wikipedia
-   (`server_name == "en.wikipedia.org"`) — the firehose is all Wikimedia
-   projects; project to a clean schema.
-3. **Dedupe**: handled durably by the Postgres `rev_id` UPSERT (Phase 7). An SSE
-   stream rarely re-sends a `rev_id` (reconnect replays are absorbed by the
-   UPSERT), so no in-pipeline Connect cache is used. A Connect cache keyed on
-   item id would be the right tool for a *poll-based* source (HN/GitHub), which
-   refetches the same ids each poll.
-4. **Enrich + classify (pass 1)**: fetch the edit's real diff from the MediaWiki
-   compare API (fail-closed to empty on error), then a `branch` builds a prompt
-   from the diff + title + comment + size delta; the model returns
-   `{label, confidence}`.
+1. **Ingest** (`connect-ingest`): edit arrives via SSE (`http_client`,
+   `stream.enabled: true`, `lines` scanner); `data:` prefix is stripped;
+   non-JSON heartbeats are dropped (fail-closed). Filter/project to English
+   Wikipedia article edits; produce to **`wiki.edits.raw`** (key = `rev_id`,
+   compacted), including `parent_rev` in the payload.
+2. **Enrich** (`connect-enrich`): consume `wiki.edits.raw`; fetch the edit's
+   real diff from the MediaWiki compare API (fail-closed to empty on error);
+   graft `diff` into the payload; produce to **`wiki.edits.enriched`**.
+3. **Dedupe**: handled durably by compacted topic keys + Postgres `rev_id`
+   UPSERT. An SSE stream rarely re-sends a `rev_id`; reconnect replays and
+   at-least-once handoffs converge via LWW compaction and UPSERT. No in-pipeline
+   Connect cache on this SSE source.
+4. **Classify pass 1** (`connect-classify` agent): consume `wiki.edits.enriched`;
+   `branch` builds a prompt from diff + title + comment + size delta; the model
+   returns `{label, confidence}`.
 5. **Confidence escalation**: if `confidence < CONFIDENCE_THRESHOLD` (or label is
    `unclear`), a `switch` escalates to a second, more rigorous pass that re-reads
    the same diff with a per-label rubric, the editor identity, and the first-pass
@@ -101,9 +100,9 @@ Described from the user's perspective:
 6. **Validate/normalize**: extract the first `{...}` block, fall back to
    `unclear` on parse failure, normalize the label to the enum
    (`.string().trim().lowercase()` + map to allowed set).
-7. **Persist**: write to a Redpanda topic and UPSERT into Postgres; cold-start
-   or transient model failures land as `unclear` and are corrected on a later
-   pass.
+7. **Persist**: fan-out to `wiki.edits.classified`, Postgres UPSERT, and
+   `model.audit`; cold-start or transient model failures land as `unclear` and
+   are corrected on a later pass.
 
 ### Flow 3 — Analyst queries history (secondary)
 1. Analyst connects to Postgres (or consumes the topic).

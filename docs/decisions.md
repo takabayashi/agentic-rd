@@ -322,3 +322,12 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** Surfaces pipeline liveness, escalation behaviour, and enough per-edit context (links + rev id) to evaluate misclassifications without dropping to `psql`/`rpk` — directly the "make testing easier" ask. Keeping the API shape stable means existing tests/contract are untouched. The actual diff *text* stays in the `model.audit` topic (not Postgres); the diff link opens it on Wikipedia, and inline diff text is deferred as a heavier follow-up. Trade-off: a couple more columns on the table.
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
+
+## Phase 10 — Staged Connect pipeline (topics as protocol)
+
+### Split monolith into three Connect services on compacted topics
+- **Decision:** Replace the single `connect/wikipedia.yaml` with three pipelines — `connect/ingest.yaml` (SSE → `wiki.edits.raw`), `connect/enrich.yaml` (`wiki.edits.raw` → diff fetch → `wiki.edits.enriched`), `connect/classify.yaml` (`wiki.edits.enriched` → Ollama pass-1 + escalation + fan-out sink). Topics are the inter-stage protocol; keys are `rev_id`; raw/enriched/classified topics use `cleanup.policy=compact`. The classify stage remains the Connect-based agent (option A — no separate Python classifier).
+- **Alternatives:** Keep one monolithic Connect job; two-service split (ingest+enrich / classify); Python agent consuming `wiki.edits.enriched`; in-pipeline `dedupe` cache before LLM.
+- **Rationale / trade-offs:** Stages map cleanly to connector vs agent responsibilities and make the data path visible in Console (`raw` → `enriched` → `classified`). Handoff fields (`parent_rev`, `diff`) live in the **JSON payload**, not metadata — Kafka round-trips drop metadata. Classify strips `diff`/`parent_rev`/`schema_version` before Postgres/topic sink so the DB schema is unchanged. At-least-once delivery + compacted keys + UPSERT still converge duplicates. Trade-off: three containers and two extra Kafka hops vs one config; accepted for clarity and replay (reconsume `wiki.edits.enriched` after prompt changes without re-hitting Wikipedia).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08

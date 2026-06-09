@@ -1,0 +1,59 @@
+# Connect ingest: Wikipedia SSE -> filter/project -> wiki.edits.raw
+#
+# Stage 1 of the staged pipeline. Parses SSE frames fail-closed, filters to
+# English Wikipedia article edits, projects a clean schema (including parent_rev
+# in the payload for the enrich stage), and produces to a compacted topic keyed
+# by rev_id.
+
+input:
+  http_client:
+    url: https://stream.wikimedia.org/v2/stream/recentchange
+    verb: GET
+    headers:
+      User-Agent: ${WIKI_USER_AGENT}
+    stream:
+      enabled: true
+      reconnect: true
+      scanner:
+        lines:
+          omit_empty: true
+
+pipeline:
+  processors:
+    - mapping: |
+        root = if content().string().has_prefix("data:") {
+          content().string().trim_prefix("data:").parse_json().catch(deleted())
+        } else {
+          deleted()
+        }
+    - mapping: |
+        root = if this.type != "edit" || this.bot == true || this.namespace != 0 || this.server_name != "en.wikipedia.org" {
+          deleted()
+        } else {
+          {
+            "schema_version": 1,
+            "rev_id": this.revision.new.int64(),
+            "parent_rev": this.revision.old.or(0).int64().catch(0),
+            "title": this.title,
+            "editor": this.user,
+            "comment": this.comment.or(""),
+            "size_delta": (this.length.new.or(0) - this.length.old.or(0)).int64(),
+            "uri": this.server_url.or("https://en.wikipedia.org") + "/w/index.php?diff=" + this.revision.new.int64().string(),
+            "event_ts": this.timestamp.ts_format("2006-01-02T15:04:05Z07:00", "UTC").catch(this.meta.dt),
+            "escalated": false,
+          }
+        }
+
+output:
+  redpanda:
+    seed_brokers: ["${REDPANDA_BROKERS}"]
+    topic: wiki.edits.raw
+    key: ${! this.rev_id.string() }
+    compression: zstd
+    batching:
+      count: 50
+      period: 1s
+
+logger:
+  level: INFO
+  format: logfmt

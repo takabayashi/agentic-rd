@@ -110,9 +110,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # One-shot: create topics with explicit configs before connect produces.
-  # classified = compacted (last-write-wins by rev_id, matches the UPSERT);
-  # model.audit = append-only with 6h retention (every call is a distinct event).
+  # One-shot: create topics with explicit configs before Connect produces.
+  # raw/enriched/classified = compacted (LWW by rev_id); model.audit = append-only.
   # `|| true` keeps it idempotent across restarts (topic already exists).
   redpanda-topics:
     image: docker.redpanda.com/redpandadata/redpanda:v25.3.15
@@ -122,30 +121,45 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >
+        rpk topic create wiki.edits.raw -c cleanup.policy=compact -X brokers=redpanda:9092 || true;
+        rpk topic create wiki.edits.enriched -c cleanup.policy=compact -X brokers=redpanda:9092 || true;
         rpk topic create wiki.edits.classified -c cleanup.policy=compact -X brokers=redpanda:9092 || true;
         rpk topic create model.audit -c cleanup.policy=delete -c retention.ms=21600000 -X brokers=redpanda:9092 || true
     restart: "no"
 
-  connect:
+  # Staged pipeline: ingest -> raw -> enrich -> enriched -> classify -> sink.
+  connect-ingest: &connect-base
     image: docker.redpanda.com/redpandadata/connect:4.95.0
-    command: run /connect/wikipedia.yaml
+    command: run /connect/ingest.yaml
     volumes:
-      - ./connect/wikipedia.yaml:/connect/wikipedia.yaml:ro
-    environment:
-      # Wikipedia 403s without a descriptive User-Agent (see .env.example).
+      - ./connect/ingest.yaml:/connect/ingest.yaml:ro
+    environment: &connect-env
       WIKI_USER_AGENT: ${WIKI_USER_AGENT:-agentic-rd/0.1 (https://github.com/takabayashi/agentic-rd)}
+      REDPANDA_BROKERS: redpanda:9092
+    extra_hosts: &connect-hosts
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redpanda-topics:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  connect-enrich:
+    <<: *connect-base
+    command: run /connect/enrich.yaml
+    volumes:
+      - ./connect/enrich.yaml:/connect/enrich.yaml:ro
+
+  connect-classify:
+    <<: *connect-base
+    command: run /connect/classify.yaml
+    volumes:
+      - ./connect/classify.yaml:/connect/classify.yaml:ro
+    environment:
+      <<: *connect-env
       OLLAMA_ADDRESS: ${OLLAMA_ADDRESS:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
-      # Pass-1 results below this confidence (or labelled `unclear`) escalate to
-      # a second, more rigorous classification pass. Lower it to escalate less.
       CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.7}
-      # Sink targets (Phase 7): Redpanda broker + the Postgres UPSERT DSN.
-      REDPANDA_BROKERS: redpanda:9092
       POSTGRES_DSN: postgres://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}?sslmode=disable
-    # Lets the documented host-Ollama override resolve everywhere (set
-    # OLLAMA_ADDRESS=http://host.docker.internal:11434 to use a host GPU).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       ollama-pull:
         condition: service_completed_successfully
@@ -153,7 +167,6 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-    restart: unless-stopped
 
 volumes:
   pgdata:

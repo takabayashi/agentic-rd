@@ -7,12 +7,11 @@ triages each edit with a multi-step LLM reasoning loop (Redpanda Connect +
 Ollama), and serves the results on a live dashboard. Built for the Redpanda
 Field Deployed Engineer build exercise.
 
-> Status: **Phase 7** — end-to-end. A Redpanda Connect pipeline ingests and
-> transforms the live Wikipedia firehose, fetches each edit's real diff,
-> classifies it with a local Ollama model (pass-1 + confidence-based escalation),
-> then **fans out** to a Redpanda topic (`wiki.edits.classified`), a Postgres
-> UPSERT (the dashboard's source), and an append-only model-audit topic
-> (`model.audit`). Browse the topics in Console at <http://localhost:8090>.
+> Status: **Phase 10** — staged pipeline. Three Redpanda Connect services
+> communicate via compacted topics: **ingest** (SSE → `wiki.edits.raw`) →
+> **enrich** (diff fetch → `wiki.edits.enriched`) → **classify** (Ollama
+> pass-1 + escalation → `wiki.edits.classified`, Postgres UPSERT, `model.audit`).
+> Browse all topics in Console at <http://localhost:8090>.
 
 ## Run
 
@@ -21,7 +20,8 @@ docker compose up        # or: make up   (run `make help` for all shortcuts)
 ```
 
 This starts Postgres (schema + seed applied automatically on first run), the web
-app, the Redpanda broker + Console, Ollama, and the `connect` pipeline. Open
+app, the Redpanda broker + Console, Ollama, and three Connect pipelines
+(`connect-ingest`, `connect-enrich`, `connect-classify`). Open
 <http://localhost:8080> for the triage dashboard and <http://localhost:8090> for
 Redpanda Console. The dashboard fills with **live** classified edits once the
 pipeline is running (it shows the seeded rows in [`db/seed.sql`](db/seed.sql)
@@ -108,63 +108,67 @@ non-throwaway use.
 The dashboard's empty state shows automatically whenever the table has no rows
 (for example, on a fresh volume before the pipeline runs).
 
-## Pipeline (ingest + transform)
+## Pipeline (staged: topics as protocol)
 
-The `connect` service runs a [Redpanda Connect](https://docs.redpanda.com/redpanda-connect/)
-pipeline ([`connect/wikipedia.yaml`](connect/wikipedia.yaml)) that ingests the
-Wikipedia [recent-changes SSE firehose](https://stream.wikimedia.org/v2/stream/recentchange)
-and transforms it into a clean, model-ready schema. Watch it live:
+Three [Redpanda Connect](https://docs.redpanda.com/redpanda-connect/) services
+hand off edits via compacted topics (key = `rev_id`):
 
-```bash
-docker compose logs -f connect   # streams one clean JSON edit per line
+| Service | Config | Role |
+|---------|--------|------|
+| `connect-ingest` | [`connect/ingest.yaml`](connect/ingest.yaml) | SSE → filter/project → `wiki.edits.raw` |
+| `connect-enrich` | [`connect/enrich.yaml`](connect/enrich.yaml) | diff fetch → `wiki.edits.enriched` |
+| `connect-classify` | [`connect/classify.yaml`](connect/classify.yaml) | Ollama agent + sink fan-out |
+
+```
+Wikipedia SSE → ingest → wiki.edits.raw → enrich → wiki.edits.enriched
+  → classify → wiki.edits.classified + Postgres + model.audit
 ```
 
-Key choices:
+Watch the pipelines:
 
-- **Source / SSE in Connect.** Consumed with `http_client` + `stream.enabled` +
-  the `lines` scanner. SSE frames look like `data: {…}`; we keep only `data:`
-  lines, strip the prefix, and `parse_json().catch(deleted())` so heartbeats
-  (`:ok`) and any non-JSON **fail closed** rather than passing through as raw
-  strings.
-- **Required `User-Agent`.** Wikipedia returns 403 without a descriptive UA; set
-  via `WIKI_USER_AGENT` (a default is in `docker-compose.yml`).
-- **Filter before the model.** We drop bots, non-`edit` events, and non-article
-  namespaces, and scope to **English Wikipedia** (`server_name ==
-  "en.wikipedia.org"`) — the firehose is *all* Wikimedia projects, and
-  Wikidata/Wiktionary edits aren't meaningful to a vandalism/substantive/trivia
-  classifier. Filtering here keeps the (later) LLM call volume bounded.
-- **Clean schema.** Projects `rev_id, title, editor, comment, size_delta, uri,
-  event_ts`; `size_delta = length.new - length.old`; the epoch `timestamp` is
-  formatted to an ISO-8601 string (TIMESTAMPTZ-safe), falling back to `meta.dt`.
+```bash
+make logs-connect   # all three services
+make consume-raw    # projected edits (includes parent_rev)
+make consume-enriched  # edits with diff text
+```
 
-Dedup is handled durably by the Postgres `rev_id` UPSERT (an SSE stream rarely
-re-sends a `rev_id`; reconnect replays are absorbed by the UPSERT), so no
-in-pipeline cache is needed. The sink is covered below.
+**Ingest** ([`connect/ingest.yaml`](connect/ingest.yaml)) consumes the
+[Wikipedia recent-changes SSE firehose](https://stream.wikimedia.org/v2/stream/recentchange)
+with `http_client` + `stream.enabled` + the `lines` scanner. SSE frames look
+like `data: {…}`; we keep only `data:` lines, strip the prefix, and
+`parse_json().catch(deleted())` so heartbeats (`:ok`) and any non-JSON **fail
+closed**. We drop bots, non-`edit` events, and non-article namespaces, and
+scope to **English Wikipedia** (`server_name == "en.wikipedia.org"`). The
+projected payload includes `parent_rev` for the enrich stage (handoff fields
+live in JSON, not metadata — Kafka drops metadata between services).
+
+**Enrich** ([`connect/enrich.yaml`](connect/enrich.yaml)) consumes
+`wiki.edits.raw`, fetches each edit's diff from the MediaWiki compare API, and
+produces `wiki.edits.enriched` with `diff` in the payload.
+
+Dedup is handled by compacted topic keys + the Postgres `rev_id` UPSERT; no
+in-pipeline cache on this SSE source. The classify sink is covered below.
 
 ## Classification (diff-enriched, two-pass)
 
-Each surviving edit is enriched with its **actual diff** and classified by a
-**local Ollama model** through Connect `branch`es (in
-[`connect/wikipedia.yaml`](connect/wikipedia.yaml)). Results are persisted to
-Postgres (and streamed to a topic — see "Sink" below); watch them flow on stdout
-logs too:
+**Classify** ([`connect/classify.yaml`](connect/classify.yaml)) consumes
+`wiki.edits.enriched` and runs the multi-step LLM agent: each edit is classified
+by a **local Ollama model** through Connect `branch`es. Results are persisted to
+Postgres and streamed to topics (see "Sink" below):
 
 ```bash
-docker compose logs -f connect   # each line carries label + confidence + escalated
+docker compose logs -f connect-classify   # classify + sink activity
+make labels escalations                   # from classify logs
 ```
 
 How it works:
 
-- **Fetch the real diff (the actual evidence).** The recentchange SSE event is
-  only edit *metadata* (title, comment, size delta) — never the changed text. A
-  `branch` fetches each edit's diff from the MediaWiki REST compare API
-  (`/w/rest.php/v1/revision/{from}/compare/{to}`, keyed off the event's parent
-  and new revision ids), keeps only the changed lines (`+ added` / `- removed` /
-  `~ modified`, dropping unchanged context), truncates to ~4 KB, and stashes it
-  in metadata so the clean record stays DB-ready. The fetch fails **closed**: a
-  deleted/suppressed revision, timeout, or rate-limit yields an empty diff and
-  classification still proceeds on metadata. A local rate limit (`wiki_api`,
-  10/s) keeps us a polite API citizen.
+- **Fetch the real diff (the actual evidence).** Handled in `connect-enrich`. The
+  recentchange SSE event is only edit *metadata* — never the changed text. The
+  enrich service fetches each edit's diff from the MediaWiki REST compare API,
+  keeps only changed lines (`+` / `-` / `~`), truncates to ~4 KB, and puts
+  `diff` in the enriched topic payload. The fetch fails **closed** (empty diff,
+  classification still proceeds on metadata). Rate limit: `wiki_api`, 10/s.
 - **Two passes (cost vs. accuracy).** Pass-1 classifies every survivor from the
   diff + metadata. A confidence `switch` then escalates only the ambiguous ones —
   `confidence < CONFIDENCE_THRESHOLD` (default `0.7`) **or** `label == unclear` —
@@ -184,13 +188,12 @@ How it works:
   this keeps latency/cost bounded and self-corrects, which we prefer over
   blocking retries (we'd flip if classifications were authoritative).
 - **Local LLM via Ollama.** A pinned `ollama` service serves the model; a
-  one-shot `ollama-pull` preloads it on startup, and `connect` waits for that to
-  complete (`service_completed_successfully`) so there's no cold-start "model not
-  found" race. First run downloads the model (`llama3.2`, ~2 GB), so the initial
-  `docker compose up` takes a few minutes; later runs reuse the cached `ollama`
-  volume.
+  one-shot `ollama-pull` preloads it on startup, and `connect-classify` waits for
+  that to complete so there's no cold-start "model not found" race. First run
+  downloads the model (`llama3.2`, ~2 GB); later runs reuse the cached `ollama`
+  volume. Ingest and enrich start without waiting on Ollama.
 - **Change the model.** Set `OLLAMA_MODEL` (any Ollama model name) in `.env`; it
-  is pulled automatically. `OLLAMA_ADDRESS` points Connect at the server.
+  is pulled automatically. `OLLAMA_ADDRESS` points `connect-classify` at the server.
 - **Memory vs. quality.** The model loads entirely in RAM inside the Docker VM,
   so the VM needs more memory than the model size: `llama3.2` (~2 GB) wants
   roughly **4 GB+** allocated to Docker (Docker Desktop defaults are fine; with
@@ -210,8 +213,8 @@ ollama pull llama3.2
 OLLAMA_ADDRESS=http://host.docker.internal:11434 docker compose up
 ```
 
-  The `connect` service already maps `host.docker.internal`, so only
-  `OLLAMA_ADDRESS` needs to change. The containerized Ollama remains the default
+  Connect services already map `host.docker.internal`, so only `OLLAMA_ADDRESS`
+  needs to change. The containerized Ollama remains the default
   so `docker compose up` is self-contained on platforms that support it (Docker
   Desktop, Linux).
 - **`branch` keeps the record intact.** `request_map` sends only the fields that
@@ -234,8 +237,8 @@ OLLAMA_ADDRESS=http://host.docker.internal:11434 docker compose up
 
 ## Sink: topics, Console & UPSERT
 
-Phase 7 replaces the temporary stdout with a `broker` fan-out (in
-[`connect/wikipedia.yaml`](connect/wikipedia.yaml)) to three destinations:
+`connect-classify` ends with a `broker` fan-out (in
+[`connect/classify.yaml`](connect/classify.yaml)) to three destinations:
 
 - **`wiki.edits.classified`** — Redpanda topic, keyed by `rev_id`, `zstd`,
   batched: the stream of classified edits. The topic is **compacted**, so it
@@ -255,8 +258,10 @@ Phase 7 replaces the temporary stdout with a `broker` fan-out (in
 Browse the topics in **Console** at <http://localhost:8090>, or from the CLI:
 
 ```bash
-docker compose exec redpanda rpk topic consume wiki.edits.classified --num 5
-docker compose exec redpanda rpk topic consume model.audit --num 2
+make consume-raw N=3
+make consume-enriched N=3
+make consume-classified N=5
+make consume-audit N=2
 ```
 
 - **Routing.** The brief's "route" requirement is met by the confidence `switch`
@@ -304,7 +309,7 @@ app/
   Dockerfile
   requirements.txt
 db/                  # init.sql (schema) + seed.sql
-connect/             # wikipedia.yaml (Redpanda Connect ingest pipeline)
+connect/             # ingest.yaml, enrich.yaml, classify.yaml (staged Connect pipelines)
 Makefile             # dev/test shortcuts (make help)
 ```
 

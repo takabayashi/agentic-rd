@@ -5,6 +5,8 @@
 
 COMPOSE       ?= docker compose
 CONNECT_IMAGE ?= docker.redpanda.com/redpandadata/connect:4.95.0
+CONNECT_YAMLS ?= connect/ingest.yaml connect/enrich.yaml connect/classify.yaml
+CONNECT_SERVICES ?= connect-ingest connect-enrich connect-classify
 APP_DIR       ?= app
 # Optional confidence threshold override, e.g. `make restart-connect THRESHOLD=0.95`.
 THRESHOLD     ?=
@@ -12,7 +14,7 @@ THRESHOLD     ?=
 .DEFAULT_GOAL := help
 .PHONY: help up up-fg down down-v restart restart-connect restart-webapp ps build \
         logs logs-connect diffs labels escalations errors psql ollama-check \
-        topics consume-classified consume-audit console open health \
+        topics consume-raw consume-enriched consume-classified consume-audit console open health \
         install test lint fmt yamllint connect-lint check
 
 help: ## Show this help
@@ -35,8 +37,8 @@ down-v: ## Stop and remove containers + volumes (re-seeds Postgres on next up)
 
 restart: down up ## Recreate the whole stack
 
-restart-connect: ## Recreate just the connect pipeline (THRESHOLD=0.95 to override)
-	$(if $(THRESHOLD),CONFIDENCE_THRESHOLD=$(THRESHOLD)) $(COMPOSE) up -d --force-recreate connect
+restart-connect: ## Recreate all connect pipelines (THRESHOLD=0.95 to override classify)
+	$(if $(THRESHOLD),CONFIDENCE_THRESHOLD=$(THRESHOLD)) $(COMPOSE) up -d --force-recreate $(CONNECT_SERVICES)
 
 restart-webapp: ## Recreate just the web app
 	$(COMPOSE) up -d --force-recreate webapp
@@ -52,21 +54,21 @@ build: ## Build images
 logs: ## Follow all service logs
 	$(COMPOSE) logs -f
 
-logs-connect: ## Follow the connect pipeline logs
-	$(COMPOSE) logs -f connect
+logs-connect: ## Follow all connect pipeline logs
+	$(COMPOSE) logs -f $(CONNECT_SERVICES)
 
 diffs: ## Show recent diff-fetch log lines (rev_id + diff_chars)
-	@$(COMPOSE) logs connect 2>/dev/null | grep "diff fetched" | tail -20
+	@$(COMPOSE) logs $(CONNECT_SERVICES) 2>/dev/null | grep "diff fetched" | tail -20
 
 labels: ## Show the classification label distribution
-	@$(COMPOSE) logs connect 2>/dev/null | grep -oE '"label":"[a-z]+"' | sort | uniq -c
+	@$(COMPOSE) logs connect-classify 2>/dev/null | grep -oE '"label":"[a-z]+"' | sort | uniq -c
 
-escalations: ## Count escalated true/false in the connect logs
-	@printf 'escalated:true  = %s\n' "$$($(COMPOSE) logs connect 2>/dev/null | grep -oc '"escalated":true')"
-	@printf 'escalated:false = %s\n' "$$($(COMPOSE) logs connect 2>/dev/null | grep -oc '"escalated":false')"
+escalations: ## Count escalated true/false in the classify logs
+	@printf 'escalated:true  = %s\n' "$$($(COMPOSE) logs connect-classify 2>/dev/null | grep -oc '"escalated":true')"
+	@printf 'escalated:false = %s\n' "$$($(COMPOSE) logs connect-classify 2>/dev/null | grep -oc '"escalated":false')"
 
 errors: ## Show connect errors (e.g. null-switch crashes); expect none
-	@$(COMPOSE) logs connect 2>/dev/null | grep "level=error" | tail -20 || echo "(no errors)"
+	@$(COMPOSE) logs $(CONNECT_SERVICES) 2>/dev/null | grep "level=error" | tail -20 || echo "(no errors)"
 
 psql: ## Open a psql shell on Postgres
 	$(COMPOSE) exec postgres psql -U $${POSTGRES_USER:-wiki} -d $${POSTGRES_DB:-wiki}
@@ -90,6 +92,12 @@ console: ## Open Redpanda Console (http://localhost:8090) in the browser
 
 topics: ## List Redpanda topics
 	$(COMPOSE) exec redpanda rpk topic list
+
+consume-raw: ## Consume from wiki.edits.raw (N=5 to override count)
+	$(COMPOSE) exec redpanda rpk topic consume wiki.edits.raw --num $(or $(N),5)
+
+consume-enriched: ## Consume from wiki.edits.enriched (N=5 to override count)
+	$(COMPOSE) exec redpanda rpk topic consume wiki.edits.enriched --num $(or $(N),5)
 
 consume-classified: ## Consume from wiki.edits.classified (N=5 to override count)
 	$(COMPOSE) exec redpanda rpk topic consume wiki.edits.classified --num $(or $(N),5)
@@ -116,9 +124,18 @@ fmt: ## Apply ruff formatting
 yamllint: ## Lint YAML files
 	yamllint .
 
-connect-lint: ## Validate the Connect pipeline config
-	docker run --rm -e WIKI_USER_AGENT=lint -e OLLAMA_ADDRESS=http://localhost:11434 -e OLLAMA_MODEL=llama3.2 \
-		-v "$(CURDIR)/connect/wikipedia.yaml:/c.yaml:ro" $(CONNECT_IMAGE) lint /c.yaml
+connect-lint: ## Validate all Connect pipeline configs
+	@for f in $(CONNECT_YAMLS); do \
+		echo "lint $$f"; \
+		docker run --rm \
+			-e WIKI_USER_AGENT=lint \
+			-e OLLAMA_ADDRESS=http://localhost:11434 \
+			-e OLLAMA_MODEL=llama3.2 \
+			-e REDPANDA_BROKERS=redpanda:9092 \
+			-e POSTGRES_DSN=postgres://wiki:change-me@postgres:5432/wiki?sslmode=disable \
+			-v "$(CURDIR)/$$f:/c.yaml:ro" \
+			$(CONNECT_IMAGE) lint /c.yaml || exit 1; \
+	done
 
 check: lint yamllint connect-lint test ## Run all local checks (mirrors CI, minus build/gitleaks)
 	@echo "All checks passed."
