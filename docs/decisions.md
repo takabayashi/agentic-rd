@@ -411,6 +411,13 @@ entries reference the ones they replace).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
 
+### Env-driven log verbosity + per-message classify visibility
+- **Decision:** Parameterize all three Connect stages' `logger.level` via `${CONNECT_LOG_LEVEL:-INFO}` (passed through the shared `connect-env` anchor), add env-gated `OLLAMA_DEBUG=${OLLAMA_DEBUG:-0}` to the `ollama` service, and add two `log` processors to `classify.yaml` — `pass1 classified` (before the escalation switch) and `classified` (after it, with the `escalated` flag) — each emitting structured `rev_id`/`label`/`confidence` fields.
+- **Alternatives:** Hardcode `DEBUG` in the YAMLs (not reversible without an edit); rely solely on global `DEBUG` level (firehose, no per-record business context); a sidecar log shipper / dedicated tracing.
+- **Rationale / trade-offs:** Operators need to (a) turn up framework verbosity without editing files and (b) see per-edit classification outcomes at the default `INFO` level. Env interpolation matches the existing `${VAR:-default}` pattern and keeps default behavior unchanged. The `log` processors give business-level visibility (label/confidence/escalation per `rev_id`) that a raw log level can't. Trade-off: two extra processors in the hot path (cheap; no IO) and a documented gotcha — Connect reads its bind-mounted config only at startup, so config changes need a container recreate. Verified live: `pass1 classified`/`classified` lines emit with structured fields; `CONNECT_LOG_LEVEL=DEBUG` and `OLLAMA_DEBUG=1` override correctly while defaults stay `INFO`/`0`.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
 ### Scalable classify metrics port (target-only mapping)
 - **Decision:** Change `connect-classify`'s metrics port from the fixed `"4195:4195"` host mapping to target-only `"4195"`, so Docker assigns a random host port per replica and `docker compose scale connect-classify=N` works without `port is already allocated` conflicts.
 - **Alternatives:** Keep the fixed `4195:4195` and never scale the service; drop host publishing entirely and scrape `4195` over the internal Docker network via DNS.

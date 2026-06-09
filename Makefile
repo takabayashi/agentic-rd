@@ -10,6 +10,11 @@ CONNECT_SERVICES ?= connect-ingest connect-enrich connect-classify
 APP_DIR       ?= app
 # Optional confidence threshold override, e.g. `make restart-connect THRESHOLD=0.95`.
 THRESHOLD     ?=
+# Connect log verbosity. LEVEL filters existing logs by level (logs/logs-connect);
+# CONNECT_LOG_LEVEL raises what Connect captures and requires a recreate
+# (`make restart-connect CONNECT_LOG_LEVEL=DEBUG`).
+LEVEL              ?=
+CONNECT_LOG_LEVEL ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help start stop up up-fg down down-v restart restart-connect restart-webapp ps build \
@@ -45,8 +50,8 @@ down-v: ## Stop and remove containers + volumes (re-seeds Postgres on next up)
 
 restart: down up ## Recreate the whole stack
 
-restart-connect: ## Recreate all connect pipelines (THRESHOLD=0.95 to override classify)
-	$(if $(THRESHOLD),CONFIDENCE_THRESHOLD=$(THRESHOLD)) $(COMPOSE) up -d --force-recreate $(CONNECT_SERVICES)
+restart-connect: ## Recreate connect pipelines (THRESHOLD=0.95, CONNECT_LOG_LEVEL=DEBUG)
+	$(if $(THRESHOLD),CONFIDENCE_THRESHOLD=$(THRESHOLD)) $(if $(CONNECT_LOG_LEVEL),CONNECT_LOG_LEVEL=$(CONNECT_LOG_LEVEL)) $(COMPOSE) up -d --force-recreate $(CONNECT_SERVICES)
 
 restart-webapp: ## Recreate just the web app
 	$(COMPOSE) up -d --force-recreate webapp
@@ -59,11 +64,11 @@ build: ## Build images
 
 ## --- Logs & pipeline observability ---
 
-logs: ## Follow all service logs
-	$(COMPOSE) logs -f
+logs: ## Follow all service logs (LEVEL=debug to filter by Connect log level)
+	$(if $(LEVEL),$(COMPOSE) logs -f | grep --line-buffered -iE "level=$(LEVEL)|level=error|level=fatal",$(COMPOSE) logs -f)
 
-logs-connect: ## Follow all connect pipeline logs
-	$(COMPOSE) logs -f $(CONNECT_SERVICES)
+logs-connect: ## Follow connect pipeline logs (LEVEL=debug to filter by Connect log level)
+	$(if $(LEVEL),$(COMPOSE) logs -f $(CONNECT_SERVICES) | grep --line-buffered -iE "level=$(LEVEL)|level=error|level=fatal",$(COMPOSE) logs -f $(CONNECT_SERVICES))
 
 diffs: ## Show recent diff-fetch log lines (rev_id + diff_chars)
 	@$(COMPOSE) logs $(CONNECT_SERVICES) 2>/dev/null | grep "diff fetched" | tail -20

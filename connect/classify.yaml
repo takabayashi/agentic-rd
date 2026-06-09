@@ -54,6 +54,14 @@ pipeline:
         root = this
         root.label = this.label.apply("normalize_label")
         root.confidence = this.confidence.apply("clamp_confidence")
+    # Per-message visibility: pass-1 result before the escalation decision.
+    - log:
+        level: INFO
+        message: pass1 classified
+        fields_mapping: |
+          root.rev_id = this.rev_id
+          root.label = this.label
+          root.confidence = this.confidence
     - switch:
         - check: this.confidence < ${CONFIDENCE_THRESHOLD:0.7} || this.label == "unclear"
           processors:
@@ -96,6 +104,15 @@ pipeline:
                   root.confidence = $parsed.confidence
                   root.escalated = true
                   meta pass2_raw = content().string()
+    # Per-message visibility: final label after the escalation switch.
+    - log:
+        level: INFO
+        message: classified
+        fields_mapping: |
+          root.rev_id = this.rev_id
+          root.label = this.label
+          root.confidence = this.confidence
+          root.escalated = this.escalated.or(false)
     # Drop enrich-only / handoff fields before sink outputs (Postgres schema unchanged).
     - mapping: |
         root = this.without("diff", "parent_rev", "schema_version")
