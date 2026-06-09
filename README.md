@@ -363,6 +363,12 @@ make connect-test  # Connect Bloblang unit tests (parse/normalize/clamp)
 make check         # ruff + yamllint + connect-lint + pytest (local CI)
 ```
 
+**Live edits (no rebuild).** The `webapp` service runs uvicorn with `--reload`
+and bind-mounts `app/triage` and `app/static` over the image, so editing the
+dashboard assets (`app/static/dashboard.css`, `dashboard.js`) or the Python
+code is picked up live — just refresh the browser. The baked image is still the
+source of truth on a fresh clone and in CI; the mounts only overlay it in dev.
+
 ### Testing
 
 The core suite is **DB-free**: it mocks `get_recent_edits` with an in-memory

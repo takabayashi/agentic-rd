@@ -38,6 +38,18 @@ services:
     build:
       context: ./app
     image: agentic-rd-webapp:0.0.0
+    # --reload (watchfiles ships with uvicorn[standard]) + the source bind-mounts
+    # below give instant edits: changing app/static assets or app/triage code is
+    # picked up live, no `docker compose up --build`. The baked image stays the
+    # source of truth in CI / on a fresh clone; the mounts just overlay it in dev.
+    command:
+      - uvicorn
+      - triage.main:app
+      - --host=0.0.0.0
+      - --port=8080
+      - --reload
+      - --reload-dir=/app/triage
+      - --reload-dir=/app/static
     ports:
       - "8080:8080"
     env_file:
@@ -46,6 +58,10 @@ services:
     environment:
       # Built from POSTGRES_* so .env stays optional; app reads DATABASE_URL only.
       DATABASE_URL: postgresql://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}
+    volumes:
+      # Overlay the baked image with live source so edits don't need a rebuild.
+      - ./app/triage:/app/triage
+      - ./app/static:/app/static
     depends_on:
       migrate:
         condition: service_completed_successfully
