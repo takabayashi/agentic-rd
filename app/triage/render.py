@@ -4,7 +4,12 @@ No template engine: the UI is one small table plus a warm-up page, so we build
 the markup here and escape every untrusted field with ``html.escape``. This is
 the load-bearing safety boundary — edit titles, comments, and editors are
 attacker-controllable free text, so anything interpolated into markup goes
-through ``_esc`` (and diff links are only emitted for http(s) URIs).
+through ``_esc`` (and links are only emitted for http(s) URIs).
+
+Live updates use a tiny vanilla-JS poller (no external library, no build step)
+that re-fetches the server-rendered ``#feed`` fragment every few seconds and
+swaps it in, flashing newly-arrived rows. The server stays the single source of
+markup — the client never re-implements row rendering.
 """
 
 import html
@@ -12,71 +17,41 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 from .models import EditView
+from .styles import DASHBOARD_CSS, WARMUP_CSS
 
-_STYLE = """
-    :root {
-      --bg: #0d1117; --panel: #161b22; --border: #30363d;
-      --text: #e6edf3; --muted: #8b949e;
-      --vandalism: #f85149; --substantive: #3fb950;
-      --trivia: #58a6ff; --unclear: #d29922;
-      --pos: #3fb950; --neg: #f85149;
-    }
-    @media (prefers-color-scheme: light) {
-      :root { --bg: #f6f8fa; --panel: #fff; --border: #d0d7de; --text: #1c2128; --muted: #57606a; }
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: var(--bg); color: var(--text); }
-    header { padding: 20px 24px 10px; max-width: 1200px; margin: 0 auto; }
-    h1 { margin: 0 0 2px; font-size: 1.3rem; }
-    .sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px; }
-    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-    .filters a { text-decoration: none; font-size: 0.82rem; padding: 4px 12px; border-radius: 999px;
-      border: 1px solid var(--border); color: var(--muted); background: var(--panel); }
-    .filters a.active { color: var(--text); border-color: var(--text); font-weight: 600; }
-    .filters a .n { opacity: 0.65; margin-left: 4px; }
-    main { max-width: 1200px; margin: 0 auto; padding: 0 24px 40px; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
-    tr:hover td { background: var(--panel); }
-    .badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 6px;
-      text-transform: uppercase; letter-spacing: 0.03em; }
-    .badge.vandalism { background: color-mix(in srgb, var(--vandalism) 22%, transparent); color: var(--vandalism); }
-    .badge.substantive { background: color-mix(in srgb, var(--substantive) 22%, transparent); color: var(--substantive); }
-    .badge.trivia { background: color-mix(in srgb, var(--trivia) 22%, transparent); color: var(--trivia); }
-    .badge.unclear { background: color-mix(in srgb, var(--unclear) 22%, transparent); color: var(--unclear); }
-    .esc { font-size: 0.68rem; color: var(--unclear); border: 1px solid var(--unclear); border-radius: 5px;
-      padding: 0 5px; margin-left: 6px; white-space: nowrap; }
-    .conf { font-variant-numeric: tabular-nums; font-weight: 600; }
-    .delta.pos { color: var(--pos); } .delta.neg { color: var(--neg); }
-    .delta { font-variant-numeric: tabular-nums; }
-    td.comment { color: var(--muted); max-width: 380px; }
-    a.title { color: var(--text); text-decoration: none; font-weight: 600; }
-    a.title:hover { text-decoration: underline; }
-    .editor { color: var(--muted); font-size: 0.8rem; }
-    .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
-    .ts { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .meta { margin-top: 3px; font-size: 0.72rem; color: var(--muted); }
-    .meta a { color: var(--trivia); text-decoration: none; }
-    .meta a:hover { text-decoration: underline; }
-    .meta .rev { font-variant-numeric: tabular-nums; }
-    .sub .stat { color: var(--text); font-weight: 600; }
-"""
+# Seconds between live-feed refreshes (client-side poll interval).
+_REFRESH_SECONDS = 5
 
-_WARMUP_STYLE = """
-    :root { --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e; }
-    @media (prefers-color-scheme: light) {
-      :root { --bg: #f6f8fa; --panel: #fff; --border: #d0d7de; --text: #1c2128; --muted: #57606a; }
-    }
-    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: var(--bg); color: var(--text); }
-    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-      padding: 32px 40px; text-align: center; max-width: 460px; }
-    h1 { margin: 0 0 8px; font-size: 1.2rem; }
-    p { margin: 0; color: var(--muted); font-size: 0.9rem; }
-"""
+_POLL_JS = """
+(function () {
+  var FEED = document.getElementById('feed');
+  var LIVE = document.getElementById('live');
+  var INTERVAL = __REFRESH_MS__;
+
+  function knownRevs() {
+    var s = {};
+    FEED.querySelectorAll('tr[data-rev]').forEach(function (tr) { s[tr.dataset.rev] = 1; });
+    return s;
+  }
+
+  function tick() {
+    if (document.hidden) return;
+    var before = knownRevs();
+    fetch('/fragment/edits' + window.location.search, { headers: { 'X-Requested-With': 'fetch' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) {
+        FEED.innerHTML = html;
+        FEED.querySelectorAll('tr[data-rev]').forEach(function (tr) {
+          if (!before[tr.dataset.rev]) tr.classList.add('new');
+        });
+        if (LIVE) LIVE.classList.remove('off');
+      })
+      .catch(function () { if (LIVE) LIVE.classList.add('off'); });
+  }
+
+  setInterval(tick, INTERVAL);
+})();
+""".replace("__REFRESH_MS__", str(_REFRESH_SECONDS * 1000))
 
 
 def _esc(value: object) -> str:
@@ -149,7 +124,7 @@ def _row(edit: EditView) -> str:
     escalated = '<span class="esc">escalated</span>' if edit.escalated else ""
     delta_cls = "pos" if edit.size_delta >= 0 else "neg"
     delta_sign = "+" if edit.size_delta >= 0 else ""
-    return f"""        <tr>
+    return f"""        <tr data-rev="{edit.rev_id}">
           <td>
             <span class="badge {label}">{label}</span>
             {escalated}
@@ -200,6 +175,42 @@ def _empty(active: str) -> str:
     </p>"""
 
 
+def render_feed(
+    edits: list[EditView],
+    filters: list[str],
+    counts: dict[str, int],
+    active: str,
+    *,
+    escalated_active: bool = False,
+    escalated_count: int = 0,
+    newest_classified_at: datetime | None = None,
+) -> str:
+    """Render the dynamic part of the dashboard (stats + filters + table).
+
+    This is what the client poller swaps into ``#feed``; it is also embedded in
+    the initial page so the dashboard renders fully without JavaScript.
+    """
+
+    label_chips = "\n      ".join(
+        _filter_chip(f, counts.get(f, 0), active, escalated_active) for f in filters
+    )
+    chips = label_chips + "\n      " + _escalated_chip(escalated_count, active, escalated_active)
+    body = _table(edits) if edits else _empty(active)
+    sub = (
+        f'<span class="stat">{counts.get("all", 0)}</span> classified · '
+        f'<span class="stat">{escalated_count}</span> escalated · '
+        f"newest {_esc(_relative_time(newest_classified_at))} · "
+        f"auto-refresh {_REFRESH_SECONDS}s"
+    )
+    return f"""<p class="sub">{sub}</p>
+    <nav class="filters">
+      {chips}
+    </nav>
+    <main>
+{body}
+    </main>"""
+
+
 def render_dashboard(
     edits: list[EditView],
     filters: list[str],
@@ -211,37 +222,31 @@ def render_dashboard(
     newest_classified_at: datetime | None = None,
 ) -> str:
     title_suffix = f" · {_esc(active)}" if active != "all" else ""
-    label_chips = "\n      ".join(
-        _filter_chip(f, counts.get(f, 0), active, escalated_active) for f in filters
-    )
-    chips = label_chips + "\n      " + _escalated_chip(escalated_count, active, escalated_active)
-    body = _table(edits) if edits else _empty(active)
-    sub = (
-        f'<span class="stat">{counts.get("all", 0)}</span> classified · '
-        f'<span class="stat">{escalated_count}</span> escalated · '
-        f"newest {_esc(_relative_time(newest_classified_at))} · auto-refresh 15s"
+    feed = render_feed(
+        edits,
+        filters,
+        counts,
+        active,
+        escalated_active=escalated_active,
+        escalated_count=escalated_count,
+        newest_classified_at=newest_classified_at,
     )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- Plain auto-refresh: re-requests the same URL (filters preserved) every 15s. -->
-  <meta http-equiv="refresh" content="15" />
   <title>Edit Triage{title_suffix}</title>
-  <style>{_STYLE}</style>
+  <style>{DASHBOARD_CSS}</style>
 </head>
 <body>
   <header>
-    <h1>Wikipedia Edit Triage</h1>
-    <p class="sub">{sub}</p>
-    <nav class="filters">
-      {chips}
-    </nav>
+    <h1>Wikipedia Edit Triage <span id="live" class="live" title="live feed"></span></h1>
   </header>
-  <main>
-{body}
-  </main>
+  <div id="feed">
+    {feed}
+  </div>
+  <script>{_POLL_JS}</script>
 </body>
 </html>
 """
@@ -255,7 +260,7 @@ def render_warming_up() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="refresh" content="5" />
   <title>Warming up…</title>
-  <style>{_WARMUP_STYLE}</style>
+  <style>{WARMUP_CSS}</style>
 </head>
 <body>
   <div class="card">

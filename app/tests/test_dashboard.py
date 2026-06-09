@@ -82,6 +82,32 @@ def test_api_edits_label_filter():
     assert rows and all(r["label"] == "vandalism" for r in rows)
 
 
+def test_api_edits_pagination():
+    all_rows = client.get("/api/edits").json()
+    assert len(all_rows) >= 4
+    page = client.get("/api/edits", params={"limit": 2, "offset": 1}).json()
+    assert len(page) == 2
+    assert [r["rev_id"] for r in page] == [r["rev_id"] for r in all_rows[1:3]]
+
+
+def test_fragment_edits_returns_table_html():
+    resp = client.get("/fragment/edits")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    # Fragment only — no full-page <html> wrapper, but has the table + rows.
+    assert "<table>" in resp.text
+    assert "data-rev=" in resp.text
+    assert "<!DOCTYPE html>" not in resp.text
+
+
+def test_dashboard_has_live_feed_poller():
+    html = client.get("/").text
+    assert 'id="feed"' in html
+    assert "/fragment/edits" in html
+    # The full-page meta-refresh is gone; updates come from the poller.
+    assert 'http-equiv="refresh"' not in html
+
+
 def test_api_edits_escalated_filter(monkeypatch):
     edits = [
         _edit(1, Label.vandalism, 0.9, escalated=True),

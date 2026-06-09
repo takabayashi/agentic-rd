@@ -1,8 +1,10 @@
 # Connect enrich: wiki.edits.raw -> diff fetch -> wiki.edits.enriched
 #
-# Stage 2 of the staged pipeline. Consumes projected edits, fetches the real
-# diff from the MediaWiki compare API (fail-closed), grafts it into the JSON
-# payload, and produces to a compacted topic keyed by rev_id.
+# Stage 2 of the staged pipeline. Consumes projected edits, validates the
+# inter-stage contract (schema_version), fetches the real diff from the
+# MediaWiki compare API (fail-closed), grafts it into the JSON payload, and
+# produces to a compacted topic keyed by rev_id. Records that fail the contract
+# are routed to a dead-letter topic instead of silently dropped.
 
 input:
   redpanda:
@@ -12,6 +14,10 @@ input:
 
 pipeline:
   processors:
+    # Inter-stage contract check: a well-formed raw record carries schema_version
+    # == 1 and a rev_id. Stamp the result in metadata for the output switch.
+    - mapping: |
+        meta schema_ok = (this.schema_version == 1 && this.rev_id != null).string()
     - branch:
         request_map: |
           root.from = this.parent_rev
@@ -30,27 +36,44 @@ pipeline:
           let changed = $body.diff.or([]).filter(d -> d.type != 0)
           let lines = $changed.map_each(d -> (if d.type == 1 { "+ " } else if d.type == 2 { "- " } else { "~ " }) + d.text.or(""))
           let text = $lines.join("\n").catch("")
-          root.diff = if $text.length() > 4000 { $text.slice(0, 4000) } else { $text }
+          root.diff = if $text.length() > ${DIFF_MAX_CHARS:4000} { $text.slice(0, ${DIFF_MAX_CHARS:4000}) } else { $text }
     - log:
         level: INFO
         message: 'diff fetched rev_id=${! this.rev_id } diff_chars=${! this.diff.or("").length() }'
 
 output:
-  redpanda:
-    seed_brokers: ["${REDPANDA_BROKERS}"]
-    topic: wiki.edits.enriched
-    key: ${! this.rev_id.string() }
-    compression: zstd
-    batching:
-      count: 50
-      period: 1s
+  switch:
+    cases:
+      - check: metadata("schema_ok") == "true"
+        output:
+          redpanda:
+            seed_brokers: ["${REDPANDA_BROKERS}"]
+            topic: wiki.edits.enriched
+            key: ${! this.rev_id.string() }
+            compression: zstd
+            batching:
+              count: 50
+              period: 1s
+      - output:
+          redpanda:
+            seed_brokers: ["${REDPANDA_BROKERS}"]
+            topic: wiki.edits.dead_letter
+            key: ${! this.rev_id.or("unknown").string() }
+            compression: zstd
 
 rate_limit_resources:
   - label: wiki_api
     local:
-      count: 10
+      count: ${WIKI_RATE_LIMIT:10}
       interval: 1s
 
+http:
+  enabled: true
+  address: 0.0.0.0:4195
+
+metrics:
+  prometheus: {}
+
 logger:
-  level: INFO
+  level: ${CONNECT_LOG_LEVEL:-INFO}
   format: logfmt

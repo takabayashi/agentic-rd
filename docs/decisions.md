@@ -347,3 +347,87 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** Stages map cleanly to connector vs agent responsibilities and make the data path visible in Console (`raw` → `enriched` → `classified`). Handoff fields (`parent_rev`, `diff`) live in the **JSON payload**, not metadata — Kafka round-trips drop metadata. Classify strips `diff`/`parent_rev`/`schema_version` before Postgres/topic sink so the DB schema is unchanged. At-least-once delivery + compacted keys + UPSERT still converge duplicates. Trade-off: three containers and two extra Kafka hops vs one config; accepted for clarity and replay (reconsume `wiki.edits.enriched` after prompt changes without re-hitting Wikipedia).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
+
+## Phase 11 — One-command start + arch/maintainability hardening
+
+> This phase intentionally exceeds the original "couple-of-hours / plain but
+> works" cap (the human asked for "everything in both tiers"). Several items
+> reverse earlier scope cuts (Alembic, metrics, richer UI); each is noted as
+> superseding where relevant.
+
+### One-command start (`start.sh` + `install.sh` + `make start`)
+- **Decision:** Add a self-healing bootstrap `start.sh` (preflight Docker checks, seed `.env`, generate a random `POSTGRES_PASSWORD`, auto-detect host Ollama on Apple Silicon, `docker compose up -d`, wait-for-`/healthz`, open the dashboard) plus a `curl | bash` `install.sh` that clones then runs it, and a `make start` target. WarpStream-demo style.
+- **Alternatives:** Document `docker compose up` only; a Python launcher; a Taskfile.
+- **Rationale / trade-offs:** `docker compose up` already worked, but a wrapper removes the common first-run papercuts (Docker not running, missing `.env`, arm64 Ollama crash, "is it up yet?"). Bash keeps it dependency-free and inspectable. Trade-off: a shell script to maintain; mitigated by `bash -n` syntax checks and keeping logic small. `curl | bash` is convenience for fresh machines (the user explicitly asked); it clones over HTTPS and runs only repo code.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Align the Python version to 3.12.13 across image/CI/ruff
+- **Decision:** Pin `app/Dockerfile` to `python:3.12.13-slim` and CI `setup-python` to `3.12.13`, matching ruff's `target-version = py312` and the documented decision. Fix the contradicting Dockerfile comment.
+- **Alternatives:** Align everything up to 3.14; leave the drift.
+- **Rationale / trade-offs:** The image had drifted to `3.14.5-slim` while CI/lint/tests targeted 3.12 — so the shipped runtime was never linted or tested. One version end-to-end means tests exercise what ships. Chose 3.12.13 (down, not up) to match the existing decision/CI with zero behavioral risk.
+- **Made by:** Agent
+- **Date:** 2026-06-08
+
+### Shared Bloblang library for the classify parse/enum (`connect/lib/classification.blobl`)
+- **Decision:** Extract the robust LLM-reply parse, enum-normalize, and confidence-clamp into reusable Bloblang `map`s, imported by both the pass-1 and pass-2 `result_map`s (and the fail-safe mapping). The label enum lives once, in `normalize_label`.
+- **Alternatives:** Keep the ~6-line parse duplicated in both passes (prior state); a resources file of `processor_resources`; YAML anchors.
+- **Rationale / trade-offs:** The two passes had near-identical parse blocks and the enum literal appeared 4×, the biggest drift risk in the pipeline. A shared `map` + `apply` is the idiomatic Bloblang DRY and keeps the two passes provably identical. The `redpanda` output / `logger` blocks were left per-file deliberately (they differ by topic; extracting them adds indirection without removing real duplication — per the architecture-principles "don't over-engineer" rule). Trade-off: an imported file must be mounted into the container and resolved by `connect lint` (the Makefile/CI now mount the whole `connect/` dir). **Validation caveat:** Connect changes were authored without a local Docker to run `connect lint`/e2e — they must pass `make connect-lint` + `make connect-test` before being trusted.
+- **Made by:** Agent
+- **Date:** 2026-06-08
+
+### Typed config via pydantic-settings; lazy single-pool repository
+- **Decision:** Add `triage/config.py` (`Settings` + cached `get_settings()`) as the one place env is read; refactor `repository.py` to build a single pool lazily via `_get_pool()` (dropping the `_opened` global flag) and add `check_ready()`.
+- **Alternatives:** Keep scattered `os.getenv`; a global pool opened at import.
+- **Rationale / trade-offs:** Centralized, validated config fails fast on bad input and makes new tunables (`RECENT_WINDOW_LIMIT`) first-class. The lazy pool removes mutable module state that tests had to patch, and `check_ready()` backs `/readyz`. Trade-off: one more module + a settings dependency (small, already implied by FastAPI's pydantic).
+- **Made by:** Agent
+- **Date:** 2026-06-08
+
+### Observability: Prometheus metrics + JSON logging + `/readyz`
+- **Decision:** Add a `/metrics` endpoint + ASGI middleware (request count/latency) and one-line JSON app logging; enable `metrics: { prometheus: {} }` on all three Connect services (classify's `:4195` mapped to host); add a DB-backed `/readyz` distinct from liveness `/healthz`.
+- **Alternatives:** Logs-only (prior state); full OpenTelemetry tracing + a Prometheus/Grafana stack in compose.
+- **Rationale / trade-offs:** Metrics + structured logs + readiness are the high-value, low-weight observability primitives a real operator needs, and they're scrapeable by any external Prometheus without bundling a stack. Full OTel tracing was judged disproportionate for a single-table app + 3-stage pipeline and was left as a documented next step. Supersedes the Phase-era "observability stack: out of scope" stance for these primitives.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Live-feed poller replaces the full-page meta-refresh
+- **Decision:** Render the dynamic dashboard region as a server-rendered `#feed` fragment (`GET /fragment/edits`) and add a tiny vanilla-JS poller that swaps it in every few seconds, flashing new rows; add `limit`/`offset` pagination to `/api/edits`. Extract CSS to `styles.py`.
+- **Alternatives:** Keep `<meta http-equiv="refresh">`; adopt HTMX (CDN or vendored); a client-side SPA re-rendering from JSON.
+- **Rationale / trade-offs:** The full-page reload was jarring and lost scroll/focus. Fetching a server-rendered fragment keeps the server as the single source of markup (no duplicated row rendering, unlike an SPA) and needs no external library or build step (unlike HTMX, which would add a CDN/runtime dependency for a local-only tool). Trade-off: ~25 lines of hand-written JS to maintain.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Alembic migrations as additive forward-evolution (SQLAlchemy schema source)
+- **Decision:** Introduce Alembic with a single SQLAlchemy table (`triage/schema.py`) as the schema source and a one-shot `migrate` compose service running `alembic upgrade head` before app/classify. The initial revision uses idempotent `create_all(checkfirst=True)`; `db/init.sql` stays as the first-boot bootstrap. A schema-contract test ties `EditView` ↔ `init.sql` ↔ `triage.schema`.
+- **Alternatives:** Keep initdb-only (prior, deferred-Alembic decision); make Alembic the *sole* creator (drop `init.sql`).
+- **Rationale / trade-offs:** Real services need forward migrations; this adds them without risking the one-command start, because the initial migration no-ops on an already-bootstrapped volume and only records the baseline. Keeping `init.sql` means two schema artifacts, so the contract test guards drift. Dropping `init.sql` entirely was rejected to avoid changing the zero-tooling first boot and the existing `down -v` re-seed story. Supersedes the Phase-3 "Alembic deferred — overkill" note. **Validation caveat:** the `migrate` service ordering wasn't run here (no Docker); needs a `docker compose up` e2e.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Inter-stage contract + dead-letter topic
+- **Decision:** `connect-enrich` validates `schema_version == 1` + present `rev_id` and routes failures to a `wiki.edits.dead_letter` topic (24h retention) via an output `switch`, making `schema_version` load-bearing instead of dead metadata.
+- **Alternatives:** Keep silently dropping malformed records; a full schema registry; DLQ at every stage.
+- **Rationale / trade-offs:** A DLQ makes malformed handoffs inspectable rather than invisible, and gives `schema_version` a job. Added at the first topic consumer (enrich) where records re-enter from Kafka; classify was left un-DLQ'd because its fail-safe always yields a valid label and it strips `schema_version` before the sink (a DLQ there would add risk for little value). A schema registry was judged too heavy for the take-home. **Validation caveat:** unlinted here (no Docker).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Scalable classify metrics port (target-only mapping)
+- **Decision:** Change `connect-classify`'s metrics port from the fixed `"4195:4195"` host mapping to target-only `"4195"`, so Docker assigns a random host port per replica and `docker compose scale connect-classify=N` works without `port is already allocated` conflicts.
+- **Alternatives:** Keep the fixed `4195:4195` and never scale the service; drop host publishing entirely and scrape `4195` over the internal Docker network via DNS.
+- **Rationale / trade-offs:** Target-only publishing is the minimal change that unblocks horizontal scaling of the classify stage (the LLM-bound bottleneck) while still exposing each replica's metrics on the host for ad-hoc inspection. Trade-off: the host port is no longer stable at `4195`, so a host-targeted Prometheus scrape needs service discovery (or the internal-network approach) instead of a hardcoded port — noted as a follow-up. Verified locally: two replicas came up on distinct ephemeral host ports (`61513`, `61514`).
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Tests against real infra: testcontainers Postgres + Connect Bloblang harness
+- **Decision:** Add a testcontainers Postgres integration test (real psycopg/SQL/pool, skips when Docker is absent) and a Redpanda Connect unit-test harness (`connect/tests/`, `make connect-test`) exercising the shared parse library; wire both into CI.
+- **Alternatives:** Stay DB-free + lint-only (prior decision); a Python mirror of the Bloblang (explicitly rejected before for drift).
+- **Rationale / trade-offs:** The integration test covers the SQL/pool path the unit tests mock; the Connect harness tests the *actual* Bloblang library (no Python mirror, so no drift) — the gnarly parse/normalize/clamp cases that were previously only covered by live e2e. Supersedes the "drop pipeline_parse.py / lint+e2e only" stance for the parse logic.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### `start.sh` hardening: build-on-start + volume-aware password (found via debugging)
+- **Decision:** `start.sh` now runs `docker compose up -d --build` (was `up -d`), and `ensure_db_password` only generates/bakes a `POSTGRES_PASSWORD` when **no `pgdata` volume exists yet** — otherwise it leaves the credential untouched and warns to `down -v` if auth fails.
+- **Alternatives:** Keep `up -d` (no build) and unconditional password generation; drop the generated password entirely; detect dependency changes some other way.
+- **Rationale / trade-offs:** Live runs surfaced two real failures. (1) `migrate` died with `exec: "alembic" not found` because `up -d` reused a cached image built before `alembic` was added to `requirements.txt`; `--build` makes a dependency change always land in the image (cheap when layers are cached). (2) `migrate` then died with `password authentication failed for user "wiki"` because the generator wrote a new `POSTGRES_PASSWORD` into `.env` while the existing `pgdata` volume still held the old `change-me` — Postgres only applies `POSTGRES_PASSWORD` on first init of an empty volume. Gating generation on volume absence removes that footgun while keeping the fresh-install security win. Both were confirmed with container exit codes/logs before fixing; the e2e run that verified the fix also validated the previously-unlinted Connect changes (492 rows in Postgres, all topics advancing, `dead_letter` empty, zero connect errors). **Validation caveat (still open):** `make connect-lint` / `make connect-test` haven't been run, though the live e2e exercised the same configs successfully.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08

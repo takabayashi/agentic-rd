@@ -1,0 +1,36 @@
+# Shared Bloblang library for the classify pipeline.
+#
+# Single source of truth for the label enum + the robust, crash-safe parse of a
+# (possibly dirty) LLM JSON reply. Imported by connect/classify.yaml in both the
+# pass-1 and escalation `result_map`s so the two passes can never drift apart.
+#
+# Usage (inside a branch result_map):
+#   import "/connect/lib/classification.blobl"
+#   let parsed = content().string().apply("parse_classification")
+#   root.label = parsed.label
+#   root.confidence = parsed.confidence
+
+# The fixed triage enum lives here once. Any label not in this set normalizes to
+# "unclear", which doubles as the prompt-injection guardrail (model output can
+# only ever be one of these four values).
+map normalize_label {
+  let l = this.or("").string().trim().lowercase()
+  root = if ["vandalism", "substantive", "trivia", "unclear"].contains($l) { $l } else { "unclear" }
+}
+
+# Coerce an arbitrary value to a confidence in [0, 1] (DB CHECK + dashboard sort
+# both require this range). Non-numeric / missing -> 0.
+map clamp_confidence {
+  let c = this.or(0).number().catch(0)
+  root = if $c < 0 { 0 } else if $c > 1 { 1 } else { $c }
+}
+
+# Parse a raw model reply (this = the reply string) into {label, confidence}.
+# Extracts the first {...} block (handles prose/code-fences around the JSON),
+# falls back to {} on failure, then normalizes the label and clamps confidence.
+map parse_classification {
+  let blob = this.or("").string().re_find_all("(?s)\\{.*\\}").index(0).or("{}")
+  let parsed = $blob.parse_json().catch({})
+  root.label = $parsed.label.apply("normalize_label")
+  root.confidence = $parsed.confidence.apply("clamp_confidence")
+}

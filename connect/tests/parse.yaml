@@ -1,0 +1,23 @@
+# Minimal harness config for the Redpanda Connect test framework.
+#
+# Applies the shared classification parse (connect/lib/classification.blobl) to
+# message content so `connect test` can assert the parse / enum-normalize /
+# confidence-clamp behavior in isolation — the gnarly bits that used to be
+# covered only by live e2e. Run with: make connect-test
+#
+# Tests live in parse_redpanda_connect_test.yaml alongside this file.
+
+input:
+  generate:
+    count: 1
+    interval: 1s
+    mapping: "root = {}"
+
+pipeline:
+  processors:
+    - mapping: |
+        import "/connect/lib/classification.blobl"
+        root = content().string().apply("parse_classification")
+
+output:
+  drop: {}

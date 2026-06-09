@@ -19,6 +19,21 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # One-shot: apply Alembic migrations (forward schema evolution) before the app
+  # and the classify sink start. Idempotent — the initial revision is a no-op on
+  # a volume already bootstrapped by db/init.sql, then records the baseline.
+  migrate:
+    build:
+      context: ./app
+    image: agentic-rd-webapp:0.0.0
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
   webapp:
     build:
       context: ./app
@@ -32,8 +47,8 @@ services:
       # Built from POSTGRES_* so .env stays optional; app reads DATABASE_URL only.
       DATABASE_URL: postgresql://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
@@ -44,6 +59,9 @@ services:
 
   ollama:
     image: ollama/ollama:0.30.6
+    environment:
+      # Set OLLAMA_DEBUG=1 in .env for verbose request/inference logs.
+      OLLAMA_DEBUG: ${OLLAMA_DEBUG:-0}
     volumes:
       # Persist pulled models so they survive restarts (avoids re-download).
       - ollama:/root/.ollama
@@ -124,6 +142,7 @@ services:
         rpk topic create wiki.edits.raw -c cleanup.policy=compact -X brokers=redpanda:9092 || true;
         rpk topic create wiki.edits.enriched -c cleanup.policy=compact -X brokers=redpanda:9092 || true;
         rpk topic create wiki.edits.classified -c cleanup.policy=compact -X brokers=redpanda:9092 || true;
+        rpk topic create wiki.edits.dead_letter -c cleanup.policy=delete -c retention.ms=86400000 -X brokers=redpanda:9092 || true;
         rpk topic create model.audit -c cleanup.policy=delete -c retention.ms=21600000 -X brokers=redpanda:9092 || true
     restart: "no"
 
@@ -136,6 +155,8 @@ services:
     environment: &connect-env
       WIKI_USER_AGENT: ${WIKI_USER_AGENT:-agentic-rd/0.1 (https://github.com/takabayashi/agentic-rd)}
       REDPANDA_BROKERS: redpanda:9092
+      # Connect logger.level interpolates this; INFO default, set DEBUG/TRACE to crank up verbosity.
+      CONNECT_LOG_LEVEL: ${CONNECT_LOG_LEVEL:-INFO}
     extra_hosts: &connect-hosts
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -148,12 +169,24 @@ services:
     command: run /connect/enrich.yaml
     volumes:
       - ./connect/enrich.yaml:/connect/enrich.yaml:ro
+    environment:
+      <<: *connect-env
+      # Diff truncation cap (chars) and MediaWiki compare-API politeness limit.
+      DIFF_MAX_CHARS: ${DIFF_MAX_CHARS:-4000}
+      WIKI_RATE_LIMIT: ${WIKI_RATE_LIMIT:-10}
 
   connect-classify:
     <<: *connect-base
     command: run /connect/classify.yaml
+    ports:
+      # Connect Prometheus metrics (+ health) for the classify stage.
+      # Target-only mapping: Docker assigns a random host port per replica so
+      # `docker compose scale connect-classify=N` works without port conflicts.
+      - "4195"
     volumes:
       - ./connect/classify.yaml:/connect/classify.yaml:ro
+      # Shared Bloblang library imported by the pass-1/pass-2 result_maps.
+      - ./connect/lib:/connect/lib:ro
     environment:
       <<: *connect-env
       OLLAMA_ADDRESS: ${OLLAMA_ADDRESS:-http://ollama:11434}
@@ -165,8 +198,8 @@ services:
         condition: service_completed_successfully
       redpanda-topics:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

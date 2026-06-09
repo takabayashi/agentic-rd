@@ -15,12 +15,32 @@ Field Deployed Engineer build exercise.
 
 ## Run
 
+**One command, from a fresh machine** (clones the repo, then starts everything):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/takabayashi/agentic-rd/main/install.sh | bash
+```
+
+**One command, from a clone:**
+
+```bash
+./start.sh        # or: make start
+```
+
+`start.sh` is a self-healing bootstrap (WarpStream-demo style): it verifies
+Docker is running, seeds `.env` from `.env.example` on first run, auto-detects a
+reachable host-native Ollama on Apple Silicon and points Connect at it, brings
+the stack up, waits for the dashboard to report healthy, and opens it. It is
+idempotent — safe to re-run.
+
+Prefer the raw command? It still works:
+
 ```bash
 docker compose up        # or: make up   (run `make help` for all shortcuts)
 ```
 
-This starts Postgres (schema + seed applied automatically on first run), the web
-app, the Redpanda broker + Console, Ollama, and three Connect pipelines
+Any of these starts Postgres (schema + seed applied automatically on first run),
+the web app, the Redpanda broker + Console, Ollama, and three Connect pipelines
 (`connect-ingest`, `connect-enrich`, `connect-classify`). Open
 <http://localhost:8080> for the triage dashboard and <http://localhost:8090> for
 Redpanda Console. The dashboard fills with **live** classified edits once the
@@ -34,14 +54,18 @@ until then).
 > run Ollama on the host (see Classification) — the containerized model can crash
 > under Colima.
 
-Health check:
+Health, readiness, and metrics:
 
 ```bash
-curl localhost:8080/healthz   # -> HTTP 200 (liveness; does not require the DB)
+curl localhost:8080/healthz   # -> 200 liveness (does NOT require the DB)
+curl localhost:8080/readyz    # -> 200 when the DB is reachable, else 503
+curl localhost:8080/metrics   # -> Prometheus exposition (request counts + latency)
 ```
 
-If you open the dashboard before Postgres is ready, you get a 503 "warming up"
-page that auto-retries — the app never crashes on a cold or transient DB.
+`/healthz` is liveness only (so an orchestrator never restarts the app during a
+cold DB start); `/readyz` is the DB-backed readiness gate. If you open the
+dashboard before Postgres is ready, you get a 503 "warming up" page that
+auto-retries — the app never crashes on a cold or transient DB.
 
 ## Dashboard & API
 
@@ -51,14 +75,21 @@ page that auto-retries — the app never crashes on a cold or transient DB.
   and the Wikipedia **diff** separately, shows the `#rev_id`, and a relative
   "Classified" time so you can see rows arriving live. Label-filter chips
   (`all/vandalism/substantive/trivia/unclear`) plus an **escalated** toggle
-  (combinable) narrow the table; 15-second auto-refresh. Rendered in plain Python
-  (no template engine); untrusted fields (title, comment, editor) are escaped
-  with `html.escape`, and links are emitted only for `http(s)` URIs with
-  `rel="noopener noreferrer"`.
-- `GET /api/edits?label=<label>&escalated=1` — the same data as JSON, newest-
-  highest-confidence first. `label` (one of `all|vandalism|substantive|trivia|
-  unclear`) and `escalated=1` both filter; omitting them returns everything.
-  Each row:
+  (combinable) narrow the table. Updates are **live**: a tiny vanilla-JS poller
+  (no external library, no build step) re-fetches the server-rendered
+  `#feed` fragment every few seconds, swaps it in, and flashes newly-arrived
+  rows — replacing the old full-page meta-refresh. A "live" dot turns grey if a
+  poll fails. Rendered in plain Python (no template engine); untrusted fields
+  (title, comment, editor) are escaped with `html.escape`, and links are emitted
+  only for `http(s)` URIs with `rel="noopener noreferrer"`.
+- `GET /fragment/edits?label=&escalated=1` — the dynamic dashboard region
+  (stats + filters + table) as an HTML fragment; this is what the poller swaps
+  in. The server stays the single source of markup (the client never
+  re-implements row rendering).
+- `GET /api/edits?label=<label>&escalated=1&limit=&offset=` — the same data as
+  JSON, newest-highest-confidence first. `label` (one of `all|vandalism|
+  substantive|trivia|unclear`) and `escalated=1` filter; `limit`/`offset`
+  paginate; omitting them returns the whole recent window. Each row:
 
 ```json
 {
@@ -80,7 +111,8 @@ page that auto-retries — the app never crashes on a cold or transient DB.
 
 Schema lives in [`db/init.sql`](db/init.sql); sample rows in
 [`db/seed.sql`](db/seed.sql). Both are applied by the Postgres image's
-init-entrypoint **only on first start** of an empty data volume. To re-apply
+init-entrypoint **only on first start** of an empty data volume — this is the
+zero-tooling bootstrap so a fresh `docker compose up` always works. To re-apply
 after editing them, recreate the volume:
 
 ```bash
@@ -107,6 +139,18 @@ non-throwaway use.
 
 The dashboard's empty state shows automatically whenever the table has no rows
 (for example, on a fresh volume before the pipeline runs).
+
+**Migrations (forward schema evolution).** Beyond the first-boot bootstrap, the
+schema is owned by [Alembic](https://alembic.sqlalchemy.org/) — a single
+SQLAlchemy table definition in [`app/triage/schema.py`](app/triage/schema.py) is
+the source, and a one-shot `migrate` compose service runs `alembic upgrade head`
+before the app and the classify sink start. The initial revision uses an
+idempotent `create_all(checkfirst=True)`, so it's a safe no-op on a volume
+already bootstrapped by `db/init.sql` and simply records the baseline; future
+schema changes ship as new revisions under
+[`app/migrations/versions/`](app/migrations/versions/). A schema-contract test
+([`app/tests/test_schema_contract.py`](app/tests/test_schema_contract.py)) keeps
+`EditView`, `db/init.sql`, and `triage.schema` from drifting apart.
 
 ## Pipeline (staged: topics as protocol)
 
@@ -143,8 +187,12 @@ projected payload includes `parent_rev` for the enrich stage (handoff fields
 live in JSON, not metadata — Kafka drops metadata between services).
 
 **Enrich** ([`connect/enrich.yaml`](connect/enrich.yaml)) consumes
-`wiki.edits.raw`, fetches each edit's diff from the MediaWiki compare API, and
-produces `wiki.edits.enriched` with `diff` in the payload.
+`wiki.edits.raw`, **validates the inter-stage contract** (`schema_version == 1`
+and a present `rev_id`), fetches each edit's diff from the MediaWiki compare API,
+and produces `wiki.edits.enriched` with `diff` in the payload. Records that fail
+the contract are routed to a **dead-letter** topic (`wiki.edits.dead_letter`,
+24h retention) via an output `switch` instead of being silently dropped, so
+malformed handoffs are inspectable in Console rather than invisible.
 
 Dedup is handled by compacted topic keys + the Postgres `rev_id` UPSERT; no
 in-pipeline cache on this SSE source. The classify sink is covered below.
@@ -254,6 +302,11 @@ OLLAMA_ADDRESS=http://host.docker.internal:11434 docker compose up
   (`{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2|null}`)
   for replay / prompt-eval / drift inspection. Captured from branch metadata; it
   is *not* persisted to Postgres (a `model_calls` table sync is left for later).
+  **Data/retention note:** these records embed the full prompts — including the
+  attacker-controlled title/comment/diff — so they're untrusted content. The
+  short time-retention (not compaction) bounds how long that text lives; for a
+  real deployment, lengthen retention deliberately, restrict topic ACLs, and
+  treat audit data as sensitive (scrub/encrypt as policy requires).
 
 Browse the topics in **Console** at <http://localhost:8090>, or from the CLI:
 
@@ -271,7 +324,26 @@ make consume-audit N=2
   wikitext diffs compress well), paired with batching for a better ratio;
   transparent to Console/consumers.
 
-Ports: dashboard `8080`, Console `8090`.
+Ports: dashboard `8080`, Console `8090`, classify Connect metrics `4195`.
+
+## Observability
+
+Lightweight, local, no external stack required:
+
+- **App metrics** — `GET /metrics` on the dashboard exposes Prometheus request
+  counts + latency (labelled by method, route template, status). Instrumented by
+  a small ASGI middleware ([`app/triage/metrics.py`](app/triage/metrics.py)).
+- **Pipeline metrics** — each Connect service serves Prometheus metrics on
+  `:4195` (`metrics: { prometheus: {} }`); the classify stage's port is mapped to
+  the host (`http://localhost:4195/metrics`) for input/output/processor counters,
+  latencies, and errors.
+- **Structured logs** — the app logs one-line JSON per record
+  ([`app/triage/logging_config.py`](app/triage/logging_config.py)) for easy
+  grep/aggregation; Connect logs `logfmt`.
+- **Readiness** — `GET /readyz` (DB-backed) vs `GET /healthz` (liveness).
+
+Point any Prometheus at `localhost:8080/metrics` and `localhost:4195/metrics` to
+scrape the app and the classify pipeline.
 
 ## Develop / test
 
@@ -279,6 +351,7 @@ A root [`Makefile`](Makefile) wraps the common workflow — run `make help` for 
 full list. Highlights:
 
 ```bash
+make start         # one-command bootstrap (./start.sh)
 make up            # docker compose up -d
 make logs-connect  # follow the pipeline
 make labels        # label distribution from the logs
@@ -286,55 +359,94 @@ make escalations   # escalated:true vs false counts
 make diffs         # recent diff-fetch lines (rev_id + diff_chars)
 make topics        # list topics; make consume-classified / consume-audit
 make psql          # psql shell on Postgres
+make connect-test  # Connect Bloblang unit tests (parse/normalize/clamp)
 make check         # ruff + yamllint + connect-lint + pytest (local CI)
 ```
 
 ### Testing
 
-Tests are **DB-free**: the pytest suite mocks `get_recent_edits` with an in-memory
-fixture, so `make test` / CI never need Postgres or the broker running.
+The core suite is **DB-free**: it mocks `get_recent_edits` with an in-memory
+fixture, so `make test` runs without Postgres or the broker. One optional
+integration test ([`tests/test_integration_db.py`](app/tests/test_integration_db.py))
+spins up a throwaway Postgres via testcontainers and **skips automatically when
+Docker isn't available**, so it never blocks the DB-free path.
+
+Run tests with `make test` (which does `cd app && pytest`, so the `triage`
+package resolves). Bare `pytest` from the repo root does **not** work by design —
+`app/pytest.ini`'s `pythonpath` only applies from `app/`; always use `make test`
+or `cd app && pytest`.
 
 ```bash
 make install   # app + dev deps (in your virtualenv)
-make test      # pytest in app/
-make check     # full local CI mirror (lint + connect-lint + test)
+make test      # pytest in app/  (DB-free; integration test skips w/o Docker)
+make check     # full local CI mirror (lint + yamllint + connect-lint + test)
 ```
 
 **What's covered**
 
 | Area | Module / file | Edge cases |
 |------|----------------|------------|
-| Dashboard & API | `tests/test_dashboard.py` | label + escalated filters, JSON shape, empty state, 503 warm-up, XSS escape on title |
-| Health | `tests/test_health.py` | `/healthz` liveness |
-| Repository | `tests/test_repository.py` | parameterized `LIMIT %s`, `DatabaseUnavailable` mapping |
+| Dashboard & API | `tests/test_dashboard.py` | label + escalated filters, pagination, JSON shape, empty state, 503 warm-up, XSS escape, live-feed fragment |
+| Health/metrics | `tests/test_health.py` | `/healthz` liveness, `/readyz` ready/down, `/metrics` exposition |
+| Repository | `tests/test_repository.py` | parameterized `LIMIT %s`, `DatabaseUnavailable` mapping, `check_ready` |
+| Schema contract | `tests/test_schema_contract.py` | `EditView` ↔ `db/init.sql` ↔ `triage.schema` agree |
+| Integration | `tests/test_integration_db.py` | real Postgres via testcontainers (skips if Docker absent) |
 
-Connect Bloblang (SSE fail-closed, LLM parse/normalize) is validated by
-`make connect-lint` and live e2e runs — not duplicated in Python.
+Connect Bloblang now has a real unit-test harness too: `make connect-test` runs
+the parse/normalize/clamp cases ([`connect/tests/`](connect/tests/)) against the
+actual shared library ([`connect/lib/classification.blobl`](connect/lib/classification.blobl)),
+and `make connect-lint` validates every pipeline config. Live e2e remains the
+final check.
 
 Layout:
 
 ```text
+start.sh             # one-command bootstrap (preflight, .env, wait-for-health)
+install.sh           # curl | bash fresh-machine installer (clones + start.sh)
 app/
   triage/            # the application package
-    main.py          # composition root: builds the app + wires the router
+    main.py          # composition root: app + router + metrics + JSON logging
+    config.py        # typed settings (pydantic-settings)  (config)
     models.py        # EditView + Label enum + select_edits()  (domain)
-    repository.py    # Postgres access: get_recent_edits, DatabaseUnavailable  (data)
-    web.py           # HTTP layer: APIRouter (dashboard, /api/edits, /healthz) + view helpers
-    render.py        # plain-Python HTML rendering (html.escape on untrusted fields)
+    schema.py        # SQLAlchemy table = Alembic schema source  (data)
+    repository.py    # Postgres access: get_recent_edits, check_ready  (data)
+    web.py           # HTTP layer: dashboard, /fragment/edits, /api/edits, /healthz, /readyz, /metrics
+    render.py        # plain-Python HTML rendering + live-feed poller
+    styles.py        # extracted CSS constants
+    metrics.py       # Prometheus middleware + /metrics payload
+    logging_config.py # one-line JSON logging
+  migrations/        # Alembic env + versions/ (forward schema evolution)
   tests/             # pytest suite + sample_data fixture
   Dockerfile
   requirements.txt
-db/                  # init.sql (schema) + seed.sql
-connect/             # ingest.yaml, enrich.yaml, classify.yaml (staged Connect pipelines)
+db/                  # init.sql (first-boot schema) + seed.sql
+connect/             # ingest/enrich/classify pipelines + lib/ (shared Bloblang) + tests/
 Makefile             # dev/test shortcuts (make help)
 ```
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust as needed. `.env` is gitignored — no
-secrets are committed. `.env` is optional: `docker-compose.yml` supplies safe
-local defaults (including the Postgres credentials), so a fresh clone runs with
-just `docker compose up`.
+Copy `.env.example` to `.env` and adjust as needed (`./start.sh` does this for
+you on first run, and also generates a random `POSTGRES_PASSWORD` so local runs
+don't use the well-known `change-me`). `.env` is gitignored — no secrets are
+committed. `.env` is optional: `docker-compose.yml` supplies safe local defaults,
+so a fresh clone still runs with just `docker compose up`.
+
+| Variable | Default | Used by | Purpose |
+|----------|---------|---------|---------|
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `wiki` / `change-me` / `wiki` | postgres, app, migrate, classify | DB credentials (compose builds `DATABASE_URL`/`POSTGRES_DSN`) |
+| `RECENT_WINDOW_LIMIT` | `200` | app | recent rows fetched before in-app filter/sort |
+| `WIKI_USER_AGENT` | repo default | ingest, enrich | Wikipedia requires a descriptive UA (403 otherwise) |
+| `DIFF_MAX_CHARS` | `4000` | enrich | truncate fetched diffs to this many chars |
+| `WIKI_RATE_LIMIT` | `10` | enrich | MediaWiki compare-API calls/sec (politeness) |
+| `OLLAMA_MODEL` / `OLLAMA_ADDRESS` | `llama3.2` / `http://ollama:11434` | classify, pull | model + server (set host address on Apple Silicon) |
+| `CONFIDENCE_THRESHOLD` | `0.7` | classify | escalate edits below this confidence |
+
+**Secrets.** Credentials come only from env/`.env` (never tracked); SQL is
+parameterized and DSNs carry no creds in logs. For a real deployment, move the
+DB password to Docker/Compose secrets or an external manager (Vault, cloud
+secrets) and scope topic ACLs — the local default flow is convenience, not a
+production secret posture.
 
 ## CI
 
@@ -348,7 +460,8 @@ this is kept minimal — just enough to keep the repo trustworthy. Jobs:
 | `lint`     | `ruff check` + `ruff format --check` (config: `ruff.toml`) |
 | `yamllint` | YAML style (config: `.yamllint.yml`)                       |
 | `hadolint` | `app/Dockerfile` best practices                            |
-| `test`     | `pytest`                                                   |
+| `test`     | `pytest` (incl. testcontainers integration test on Docker) |
+| `connect-lint` | `connect lint` all pipelines + Connect Bloblang unit tests |
 | `build`    | `docker compose build` (proves images build)               |
 | `gitleaks` | secret scan over full git history                          |
 

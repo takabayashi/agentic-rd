@@ -12,14 +12,22 @@ APP_DIR       ?= app
 THRESHOLD     ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help up up-fg down down-v restart restart-connect restart-webapp ps build \
+.PHONY: help start stop up up-fg down down-v restart restart-connect restart-webapp ps build \
         logs logs-connect diffs labels escalations errors psql ollama-check \
         topics consume-raw consume-enriched consume-classified consume-audit console open health \
-        install test lint fmt yamllint connect-lint check
+        install test lint fmt yamllint connect-lint connect-test check
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+
+## --- One-command start ---
+
+start: ## One-command start: preflight + .env seed + wait-for-health + open dashboard
+	./start.sh
+
+stop: ## Stop the stack (alias for down)
+	$(COMPOSE) down
 
 ## --- Services ---
 
@@ -133,9 +141,14 @@ connect-lint: ## Validate all Connect pipeline configs
 			-e OLLAMA_MODEL=llama3.2 \
 			-e REDPANDA_BROKERS=redpanda:9092 \
 			-e POSTGRES_DSN=postgres://wiki:change-me@postgres:5432/wiki?sslmode=disable \
-			-v "$(CURDIR)/$$f:/c.yaml:ro" \
-			$(CONNECT_IMAGE) lint /c.yaml || exit 1; \
+			-v "$(CURDIR)/connect:/connect:ro" \
+			$(CONNECT_IMAGE) lint "/$$f" || exit 1; \
 	done
+
+connect-test: ## Run the Connect Bloblang unit tests (parse/normalize/clamp)
+	docker run --rm \
+		-v "$(CURDIR)/connect:/connect:ro" \
+		$(CONNECT_IMAGE) test /connect/tests/parse.yaml
 
 check: lint yamllint connect-lint test ## Run all local checks (mirrors CI, minus build/gitleaks)
 	@echo "All checks passed."

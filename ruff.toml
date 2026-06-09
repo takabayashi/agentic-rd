@@ -17,6 +17,7 @@ select = [
 ]
 
 [lint.per-file-ignores]
-# render.py is mostly embedded CSS/HTML string literals where wrapping lines to
-# 100 cols would hurt readability rather than help.
+# render.py / styles.py are mostly embedded HTML/CSS/JS string literals where
+# wrapping lines to 100 cols would hurt readability rather than help.
 "app/triage/render.py" = ["E501"]
+"app/triage/styles.py" = ["E501"]

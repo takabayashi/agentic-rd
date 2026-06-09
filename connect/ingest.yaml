@@ -54,6 +54,13 @@ output:
       count: 50
       period: 1s
 
+http:
+  enabled: true
+  address: 0.0.0.0:4195
+
+metrics:
+  prometheus: {}
+
 logger:
-  level: INFO
+  level: ${CONNECT_LOG_LEVEL:-INFO}
   format: logfmt

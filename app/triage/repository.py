@@ -1,36 +1,18 @@
 """Postgres-backed repository for classified edits.
 
-This is the data-source seam the web layer depends on (it replaces the Phase 2
-`mock_data.load_edits`). The connection pool is constructed at import time but
-opened lazily, so importing this module never connects to — or requires — a live
-database. That keeps unit tests and CI DB-free while the real pool is used at
-runtime.
+This is the data-source seam the web layer depends on. The connection pool is
+created lazily on first use (so importing this module never connects to — or
+requires — a live database, keeping unit tests and CI DB-free), then reused.
+Short timeouts + a per-checkout connection ``check`` mean a missing/slow DB
+fails fast into a 503 and the pool self-heals after Postgres restarts.
 """
-
-import os
 
 from psycopg import OperationalError
 from psycopg.rows import class_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
+from .config import get_settings
 from .models import EditView
-
-DSN = os.getenv("DATABASE_URL", "postgresql://wiki:change-me@postgres:5432/wiki")
-
-# Short timeouts so a missing/slow DB fails fast into a 503 rather than hanging a
-# request. `check` validates a connection before handing it out, so the pool
-# recovers automatically after Postgres is restarted. `open=False` defers the
-# first connection attempt until a query actually runs.
-_pool = ConnectionPool(
-    DSN,
-    min_size=1,
-    max_size=5,
-    open=False,
-    timeout=3.0,
-    check=ConnectionPool.check_connection,
-    kwargs={"connect_timeout": 3},
-)
-_opened = False
 
 _SELECT_RECENT = """
     SELECT rev_id, title, editor, comment, label, confidence,
@@ -40,33 +22,51 @@ _SELECT_RECENT = """
     LIMIT %s
 """
 
+# Module-level pool handle, built on first use via `_get_pool()`.
+_pool: ConnectionPool | None = None
+
 
 class DatabaseUnavailable(Exception):
     """Raised when the database can't be reached. The web layer maps this to a
     503 warm-up response instead of crashing the request."""
 
 
-def _ensure_open() -> None:
-    """Open the pool on first use. `open(wait=False)` never blocks or raises if
-    the DB is down — connections are established in the background."""
+def _get_pool() -> ConnectionPool:
+    """Build (once) and return the connection pool.
 
-    global _opened
-    if not _opened:
-        _pool.open(wait=False)
-        _opened = True
+    ``open=True`` here is safe because the pool opens connections in the
+    background and never blocks/raises if the DB is down. Subsequent calls reuse
+    the same pool.
+    """
+
+    global _pool
+    if _pool is None:
+        s = get_settings()
+        _pool = ConnectionPool(
+            s.database_url,
+            min_size=s.pool_min_size,
+            max_size=s.pool_max_size,
+            open=True,
+            timeout=s.db_timeout_seconds,
+            check=ConnectionPool.check_connection,
+            kwargs={"connect_timeout": s.db_connect_timeout},
+        )
+    return _pool
 
 
-def get_recent_edits(limit: int = 200) -> list[EditView]:
+def get_recent_edits(limit: int | None = None) -> list[EditView]:
     """Return the most recent classified edits as ``EditView`` objects.
 
     Raises ``DatabaseUnavailable`` on any connection failure so a cold start or
     a transient outage degrades gracefully (and recovers on the next request).
     """
 
-    _ensure_open()
+    if limit is None:
+        limit = get_settings().recent_window_limit
+    pool = _get_pool()
     try:
         with (
-            _pool.connection(timeout=3.0) as conn,
+            pool.connection(timeout=get_settings().db_timeout_seconds) as conn,
             conn.cursor(row_factory=class_row(EditView)) as cur,
         ):
             cur.execute(_SELECT_RECENT, (limit,))
@@ -75,10 +75,25 @@ def get_recent_edits(limit: int = 200) -> list[EditView]:
         raise DatabaseUnavailable(str(exc)) from exc
 
 
+def check_ready() -> bool:
+    """Return True if the database is reachable right now (for /readyz).
+
+    Never raises: a down/warming DB simply returns False.
+    """
+
+    try:
+        pool = _get_pool()
+        with pool.connection(timeout=get_settings().db_timeout_seconds) as conn:
+            conn.execute("SELECT 1")
+        return True
+    except (OperationalError, PoolTimeout):
+        return False
+
+
 def close_pool() -> None:
     """Close the pool on app shutdown (called from the FastAPI lifespan)."""
 
-    global _opened
-    if _opened:
+    global _pool
+    if _pool is not None:
         _pool.close()
-        _opened = False
+        _pool = None

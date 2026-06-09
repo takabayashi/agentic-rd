@@ -39,22 +39,21 @@ pipeline:
               prompt: |
                 ${! "Title: " + this.title + "\nEdit summary (comment): " + this.comment + "\nSize delta (bytes): " + this.size_delta.string() + "\nDiff (+added / -removed lines):\n" + this.diff }
         result_map: |
-          let blob = content().string().re_find_all("(?s)\\{.*\\}").index(0).or("{}")
-          let parsed = $blob.parse_json().catch({})
-          let label = $parsed.label.or("").string().trim().lowercase()
-          let nlabel = if ["vandalism", "substantive", "trivia", "unclear"].contains($label) { $label } else { "unclear" }
-          root.label = $nlabel
-          let c = $parsed.confidence.or(0).number().catch(0)
-          let nconf = if $c < 0 { 0 } else if $c > 1 { 1 } else { $c }
-          root.confidence = $nconf
+          import "/connect/lib/classification.blobl"
+          let parsed = content().string().apply("parse_classification")
+          root.label = $parsed.label
+          root.confidence = $parsed.confidence
           meta pass1_raw = content().string()
-          meta pass1_label = $nlabel
-          meta pass1_confidence = $nconf
+          meta pass1_label = $parsed.label
+          meta pass1_confidence = $parsed.confidence
+    # Fail-safe defaults: if the pass-1 branch's model call failed, Connect skips
+    # its result_map, so this guarantees a valid enum label + numeric confidence
+    # before the escalation switch compares confidence (no `null < threshold`).
     - mapping: |
+        import "/connect/lib/classification.blobl"
         root = this
-        let l = this.label.string().catch("")
-        root.label = if ["vandalism", "substantive", "trivia", "unclear"].contains($l) { $l } else { "unclear" }
-        root.confidence = this.confidence.number().catch(0)
+        root.label = this.label.apply("normalize_label")
+        root.confidence = this.confidence.apply("clamp_confidence")
     - switch:
         - check: this.confidence < ${CONFIDENCE_THRESHOLD:0.7} || this.label == "unclear"
           processors:
@@ -91,12 +90,10 @@ pipeline:
                       prompt: |
                         ${! "Title: " + this.title + "\nEditor: " + this.editor + "\nEdit summary (comment): " + this.comment + "\nSize delta (bytes): " + this.size_delta.string() + "\nFirst pass: " + this.first_pass_label + " (confidence " + this.first_pass_confidence.string() + ")\nDiff (+added / -removed lines):\n" + this.diff }
                 result_map: |
-                  let blob = content().string().re_find_all("(?s)\\{.*\\}").index(0).or("{}")
-                  let parsed = $blob.parse_json().catch({})
-                  let label = $parsed.label.or("").string().trim().lowercase()
-                  root.label = if ["vandalism", "substantive", "trivia", "unclear"].contains($label) { $label } else { "unclear" }
-                  let c = $parsed.confidence.or(0).number().catch(0)
-                  root.confidence = if $c < 0 { 0 } else if $c > 1 { 1 } else { $c }
+                  import "/connect/lib/classification.blobl"
+                  let parsed = content().string().apply("parse_classification")
+                  root.label = $parsed.label
+                  root.confidence = $parsed.confidence
                   root.escalated = true
                   meta pass2_raw = content().string()
     # Drop enrich-only / handoff fields before sink outputs (Postgres schema unchanged).
@@ -161,6 +158,13 @@ output:
                 "pass2": if this.escalated { {"raw_response": meta("pass2_raw").or(""), "label": this.label, "confidence": this.confidence} } else { null },
               }
 
+http:
+  enabled: true
+  address: 0.0.0.0:4195
+
+metrics:
+  prometheus: {}
+
 logger:
-  level: INFO
+  level: ${CONNECT_LOG_LEVEL:-INFO}
   format: logfmt

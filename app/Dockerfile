@@ -1,5 +1,7 @@
-# Pinned base image (Python 3.12.13 slim). Repinned deliberately, not :latest.
-FROM python:3.14.5-slim
+# Pinned base image (exact patch, not :latest). Kept in lockstep with the CI
+# Python (.github/workflows/ci.yml) and ruff's target-version (ruff.toml) so the
+# image, linter, and tests all run the same interpreter.
+FROM python:3.12.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

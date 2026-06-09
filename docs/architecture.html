@@ -396,12 +396,11 @@
     </div>
     <div class="progress-strip">
       <div class="progress-header">
-        <strong>Build progress — Phase 5 of 10</strong>
-        <span>Phases 0–5 complete · 6–9 planned</span>
+        <strong>Build progress — Phase 11 (staged pipeline + hardening)</strong>
+        <span>Phases 0–11 built · live end-to-end</span>
       </div>
-      <div class="progress-bar" role="progressbar" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">
-        <div class="seg-done" style="width:50%"></div>
-        <div class="seg-planned"></div>
+      <div class="progress-bar" role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100">
+        <div class="seg-done" style="width:100%"></div>
       </div>
       <div class="phase-pills">
         <span class="phase-pill done">0 Skeleton</span>
@@ -410,10 +409,12 @@
         <span class="phase-pill done">3 Postgres</span>
         <span class="phase-pill done">4 Ingest</span>
         <span class="phase-pill done">5 LLM pass-1</span>
-        <span class="phase-pill planned">6 Escalation</span>
-        <span class="phase-pill planned">7 Dual sink</span>
-        <span class="phase-pill planned">8 Tests</span>
-        <span class="phase-pill planned">9 Write-up</span>
+        <span class="phase-pill done">6 Escalation</span>
+        <span class="phase-pill done">7 Dual sink</span>
+        <span class="phase-pill done">8 Tests</span>
+        <span class="phase-pill done">9 Write-up</span>
+        <span class="phase-pill done">10 Staged pipeline</span>
+        <span class="phase-pill done">11 One-command + hardening</span>
       </div>
     </div>
   </div>
@@ -438,9 +439,7 @@
 
 <main>
   <p class="legend">
-    <span><i style="background:var(--done-bg);border-color:var(--done)"></i> Built (Phases 0–5)</span>
-    <span><i style="background:var(--planned-bg);border-color:var(--planned)"></i> Planned (Phases 6–9)</span>
-    <span><i style="background:var(--partial-bg);border-color:var(--partial)"></i> Partial / stdout only</span>
+    <span><i style="background:var(--done-bg);border-color:var(--done)"></i> Built &amp; live (Phases 0–11)</span>
   </p>
 
   <section id="files">
@@ -451,26 +450,29 @@
         <pre class="mermaid">
 flowchart TD
   root["agentic-rd/"]
+  root --> start["start.sh + install.sh one-command"]
   root --> app["app/ webapp"]
-  root --> db["db/ init.sql + seed.sql"]
+  root --> db["db/ init.sql + seed.sql bootstrap"]
   root --> connect["connect/ ingest + enrich + classify"]
   root --> docs["docs/ PRD + TODO + decisions"]
   root --> gh[".github/ workflows/ci.yml"]
   root --> compose["docker-compose.yml"]
-  root --> arch["architecture.html"]
 
   app --> pkg["triage/ package"]
-  app --> reqs["requirements.txt"]
-  app --> docker["Dockerfile python 3.12"]
-  app --> tests["tests/ pytest"]
-  pkg --> main["main.py compose root"]
+  app --> migrations["migrations/ alembic"]
+  app --> tests["tests/ pytest + integration"]
+  pkg --> main["main.py root + metrics + JSON logs"]
+  pkg --> config["config.py pydantic-settings"]
   pkg --> models["models.py EditView + Label"]
-  pkg --> repo["repository.py psycopg pool"]
-  pkg --> web["web.py routes + helpers"]
-  pkg --> render["render.py plain HTML escape"]
+  pkg --> schema["schema.py SQLAlchemy table"]
+  pkg --> repo["repository.py psycopg pool + check_ready"]
+  pkg --> web["web.py routes + fragment + metrics"]
+  pkg --> render["render.py HTML + live poller"]
+  connect --> lib["lib/ classification.blobl shared"]
+  connect --> ctests["tests/ Bloblang harness"]
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  class app,pkg,main,models,repo,web,render,reqs,docker,tests,db,connect,compose,gh,docs,arch done;
+  class start,app,pkg,migrations,main,config,models,schema,repo,web,render,tests,db,connect,lib,ctests,compose,gh,docs done;
         </pre>
       </div>
     </div>
@@ -478,8 +480,8 @@ flowchart TD
 
   <section id="layers">
     <div class="section-card">
-      <h2><span class="num">02</span> System layers overview</h2>
-      <p class="desc">End-to-end path: ingest, transform, classify, serve. Dashboard and Postgres are live; Connect classifies to stdout; topic and UPSERT sink arrive in Phase 7.</p>
+      <h2><span class="num">02</span> System layers overview <span class="tag done">live</span></h2>
+      <p class="desc">Three Redpanda Connect services hand off via compacted topics (keyed by <code>rev_id</code>): ingest → enrich → classify. Classify fans out to the classified topic, a Postgres UPSERT, and an audit topic. The dashboard reads Postgres live.</p>
       <div class="diagram">
         <pre class="mermaid">
 flowchart LR
@@ -487,46 +489,51 @@ flowchart LR
     wiki["Wikipedia SSE firehose"]
   end
 
-  subgraph ingest["Ingest + Transform — Connect"]
+  subgraph ingestSvc["connect-ingest"]
     sse["http_client SSE"]
-    filt["Filter + project Bloblang"]
+    filt["filter + project Bloblang"]
   end
+  rawT["topic wiki.edits.raw"]
 
-  subgraph reason["Reasoning — Ollama"]
-    p1["Pass 1 classify"]
-    sw{"confidence low?"}
-    p2["Pass 2 escalate"]
+  subgraph enrichSvc["connect-enrich"]
+    diff["MediaWiki diff fetch"]
+    contract["schema_version contract"]
+  end
+  enrT["topic wiki.edits.enriched"]
+  dlq["topic wiki.edits.dead_letter"]
+
+  subgraph classifySvc["connect-classify — Ollama agent"]
+    p1["pass-1 classify"]
+    sw{"confidence low or unclear?"}
+    p2["pass-2 escalate"]
     ollama["Ollama local model"]
   end
 
   subgraph store["Storage"]
-    stdout["stdout temp sink"]
-    topic["topic wiki.edits.classified"]
-    pg[("Postgres classified_edits")]
+    clsT["topic wiki.edits.classified"]
+    auditT["topic model.audit"]
+    pg[("Postgres classified_edits UPSERT")]
   end
 
   subgraph serve["Serving — FastAPI"]
-    api["webapp"]
-    dash["Dashboard + api/edits"]
+    api["webapp + metrics"]
+    dash["dashboard + live fragment"]
   end
 
-  wiki --> sse --> filt --> p1
+  wiki --> sse --> filt --> rawT --> diff
+  contract -- bad --> dlq
+  diff --> enrT --> p1
   p1 --> ollama
   p1 --> sw
   sw -- yes --> p2 --> ollama
-  sw -- no --> stdout
-  p2 --> stdout
-  stdout -.planned.-> topic
-  topic -.planned.-> pg
+  sw -- yes --> clsT
+  sw -- no --> clsT
+  clsT --> pg
+  clsT --> auditT
   pg --> api --> dash
-  pg -.seeds today.-> dash
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  classDef partial fill:#2563eb22,stroke:#2563eb,color:#2563eb;
-  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
-  class wiki,sse,filt,p1,ollama,api,dash,pg done;
-  class stdout partial;
-  class sw,p2,topic planned;
+  class wiki,sse,filt,rawT,diff,contract,enrT,dlq,p1,sw,p2,ollama,clsT,auditT,pg,api,dash done;
         </pre>
       </div>
     </div>
@@ -602,36 +609,43 @@ sequenceDiagram
 
   <section id="pipeline">
     <div class="section-card">
-      <h2><span class="num">05</span> Connect pipeline stages <span class="tag partial">pass-1 live</span></h2>
-      <p class="desc">Current config: input, three processor stages, stdout sink. Phase 6 adds switch + pass 2; Phase 7 replaces stdout with Kafka topic + Postgres UPSERT.</p>
+      <h2><span class="num">05</span> Connect pipeline stages <span class="tag done">staged + live</span></h2>
+      <p class="desc">Three services on compacted topics. Ingest projects the schema; enrich fetches the diff and gates on the <code>schema_version</code> contract (bad rows to dead-letter); classify runs pass-1 + escalation (shared Bloblang parse) and fans out to topic + Postgres UPSERT + audit. Each service exposes Prometheus metrics on <code>:4195</code>.</p>
       <div class="diagram">
         <pre class="mermaid">
 flowchart TD
   in["input http_client SSE lines scanner"]
-  d1["processor strip data prefix parse_json"]
-  d2["processor filter + project schema"]
+  d1["strip data prefix + parse_json fail-closed"]
+  d2["filter + project schema + schema_version"]
+  rawOut["output wiki.edits.raw compacted"]
+  enrIn["input wiki.edits.raw"]
+  okCheck{"schema_version == 1?"}
+  diff["branch MediaWiki diff fetch"]
+  enrOut["output wiki.edits.enriched"]
+  dlqOut["output wiki.edits.dead_letter"]
+  clsIn["input wiki.edits.enriched"]
   br1["branch pass-1 ollama_chat"]
-  pr1["result_map graft label confidence"]
+  prShared["shared parse: lib/classification.blobl"]
   sw{"switch confidence threshold"}
   br2["branch pass-2 escalate"]
-  pr2["result_map escalated true"]
-  out0["output stdout temp"]
-  out1["output kafka topic"]
-  out2["output sql_insert UPSERT"]
+  fan["broker fan_out"]
+  o1["redpanda wiki.edits.classified"]
+  o2["sql_raw UPSERT retry"]
+  o3["redpanda model.audit"]
 
-  in --> d1 --> d2 --> br1 --> pr1 --> sw
-  pr1 --> out0
-  sw -- escalate --> br2 --> pr2
-  sw -- keep --> out1
-  pr2 --> out1
-  out1 --> out2
+  in --> d1 --> d2 --> rawOut
+  rawOut --> enrIn --> okCheck
+  okCheck -- yes --> diff --> enrOut
+  okCheck -- no --> dlqOut
+  enrOut --> clsIn --> br1 --> prShared --> sw
+  sw -- escalate --> br2 --> prShared
+  sw --> fan
+  fan --> o1
+  fan --> o2
+  fan --> o3
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  classDef partial fill:#2563eb22,stroke:#2563eb,color:#2563eb;
-  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
-  class in,d1,d2,br1,pr1 done;
-  class out0 partial;
-  class sw,br2,pr2,out1,out2 planned;
+  class in,d1,d2,rawOut,enrIn,okCheck,diff,enrOut,dlqOut,clsIn,br1,prShared,sw,br2,fan,o1,o2,o3 done;
         </pre>
       </div>
     </div>
@@ -724,7 +738,7 @@ classDiagram
   <section id="lifecycle">
     <div class="section-card">
       <h2><span class="num">08</span> Service lifecycle and startup ordering</h2>
-      <p class="desc">Compose gates services on healthchecks. Webapp serves a 503 warm-up page when Postgres is down; <code>/healthz</code> stays DB-independent.</p>
+      <p class="desc">Compose gates services on healthchecks. A one-shot <code>migrate</code> (alembic) runs after Postgres is healthy and gates the webapp + classify. Webapp serves a 503 warm-up page when Postgres is down; <code>/healthz</code> is liveness-only, <code>/readyz</code> checks the DB.</p>
       <div class="diagram">
         <pre class="mermaid">
 stateDiagram-v2
@@ -742,13 +756,18 @@ stateDiagram-v2
       <div class="diagram">
         <pre class="mermaid">
 flowchart LR
-  pg[("postgres healthy gate")] --> webapp["webapp :8080"]
+  pg[("postgres healthy")] --> migrate["migrate alembic upgrade head"]
+  migrate --> webapp["webapp :8080"]
   ollama["ollama healthy"] --> pull["ollama-pull completed"]
-  pull --> connect["connect pipeline"]
-  connect --> pg
+  rp["redpanda healthy"] --> topics["redpanda-topics created"]
+  topics --> ingest["connect-ingest"]
+  topics --> enrich["connect-enrich"]
+  pull --> classify["connect-classify"]
+  topics --> classify
+  migrate --> classify
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  class pg,webapp,ollama,pull,connect done;
+  class pg,migrate,webapp,ollama,pull,rp,topics,ingest,enrich,classify done;
         </pre>
       </div>
     </div>
@@ -804,36 +823,39 @@ flowchart TD
 
   <section id="endpoints">
     <div class="section-card">
-      <h2><span class="num">11</span> HTTP endpoints and topics map</h2>
-      <p class="desc">FastAPI routes in <code>triage/web.py</code>. No WebSocket surface. Kafka topic and live DB feed are Phase 7.</p>
+      <h2><span class="num">11</span> HTTP endpoints and topics map <span class="tag done">live</span></h2>
+      <p class="desc">FastAPI routes in <code>triage/web.py</code>. The dashboard updates via a JS poller hitting <code>/fragment/edits</code> (no WebSocket). Connect classify fans out to topics + Postgres; each Connect stage serves metrics on <code>:4195</code>.</p>
       <div class="diagram">
         <pre class="mermaid">
 flowchart LR
   subgraph http["FastAPI :8080"]
-    r1["GET / dashboard HTML"]:::done
-    r2["GET /api/edits label filter JSON"]:::done
-    r3["GET /healthz liveness 200"]:::done
+    r1["GET / dashboard HTML"]
+    r2["GET /api/edits filter + paginate JSON"]
+    rf["GET /fragment/edits live poll"]
+    r3["GET /healthz liveness"]
+    r4["GET /readyz DB readiness"]
+    r5["GET /metrics Prometheus"]
   end
 
-  subgraph pipeline["Connect output"]
-    stdout["stdout classified JSON"]:::partial
-    topic["wiki.edits.classified"]:::planned
+  subgraph topics["Redpanda topics"]
+    t1["wiki.edits.classified"]
+    t2["model.audit"]
+    t3["wiki.edits.dead_letter"]
   end
 
   subgraph db["Postgres"]
-    tbl["classified_edits UPSERT"]:::done
-    seed["seed.sql 5 rows today"]:::done
+    tbl["classified_edits UPSERT"]
+    seed["init.sql + seed.sql bootstrap"]
   end
 
-  stdout -.Phase 7.-> topic
-  topic --> tbl
+  t1 --> tbl
   seed --> tbl
   tbl --> r1
   tbl --> r2
+  tbl --> rf
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  classDef partial fill:#2563eb22,stroke:#2563eb,color:#2563eb;
-  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
+  class r1,r2,rf,r3,r4,r5,t1,t2,t3,tbl,seed done;
         </pre>
       </div>
     </div>
@@ -855,11 +877,11 @@ flowchart LR
   p6 --> p7["7 Dual sink UPSERT"]
   p7 --> p8["8 Focused tests"]
   p8 --> p9["9 Write-up polish"]
+  p9 --> p10["10 Staged pipeline"]
+  p10 --> p11["11 One-command + hardening"]
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  classDef planned fill:#d9770622,stroke:#d97706,color:#d97706;
-  class p0,p1,p2,p3,p4,p5 done;
-  class p6,p7,p8,p9 planned;
+  class p0,p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11 done;
         </pre>
       </div>
     </div>

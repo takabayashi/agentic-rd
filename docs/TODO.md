@@ -255,6 +255,33 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 - [ ] Surprises + production-failure paragraphs are present and specific
 - [ ] `docker compose up` is the only required command (no forgotten manual steps)
 
+## Phase 11 — One-command start + arch/maintainability hardening
+
+> Goal: a WarpStream-style one-command start, plus the full set of arch and
+> maintainability improvements from the codebase review. Intentionally exceeds
+> the original "plain but works" cap (requested explicitly). Connect-side items
+> were authored without local Docker — they require `make connect-lint` +
+> `make connect-test` + an e2e `docker compose up` to validate.
+
+- [x] One-command start: `start.sh` (preflight, `.env` seed, random DB password, Apple-Silicon host-Ollama, wait-for-health, open) + `install.sh` (`curl | bash`) + `make start`
+- [x] Align Python to `3.12.13` across `app/Dockerfile`, CI, `ruff.toml`
+- [x] DRY the classify parse/enum into `connect/lib/classification.blobl` (imported by both passes)
+- [x] Typed config (`triage/config.py`, pydantic-settings); lazy single-pool repository; `check_ready()`
+- [x] Observability: `/metrics` (Prometheus) + JSON logging; Connect `prometheus` metrics on all stages (classify `:4195`); `/readyz`
+- [x] Live-feed poller (`/fragment/edits`) replacing meta-refresh; `/api/edits` pagination; CSS extracted to `styles.py`
+- [x] Alembic migrations (`triage/schema.py` source, `migrate` one-shot service, additive/idempotent)
+- [x] Inter-stage `schema_version` contract + `wiki.edits.dead_letter` topic (enrich)
+- [x] Named tunables: `RECENT_WINDOW_LIMIT`, `DIFF_MAX_CHARS`, `WIKI_RATE_LIMIT`
+- [x] Tests: schema-contract, `/readyz` + `/metrics`, testcontainers Postgres integration, Connect Bloblang harness (`make connect-test`); both wired into CI
+- [x] Generated local `POSTGRES_PASSWORD`; secrets/`model.audit` retention notes (README)
+- [x] Docs: README (one-command, observability, migrations, dead-letter, config table), `decisions.md`, this file
+
+**Acceptance criteria**
+- [x] `ruff check` / `ruff format --check` / `yamllint` / `pytest` pass locally (26 passed, 2 integration skipped without Docker)
+- [ ] `make connect-lint` + `make connect-test` pass *(needs Docker — not run in the authoring env)*
+- [ ] `./start.sh` brings the full stack up to a healthy dashboard from a fresh clone *(needs Docker)*
+- [ ] `docker compose up` runs the `migrate` job, dashboard fills with live classified edits, dead-letter stays empty for well-formed records *(needs Docker)*
+
 ---
 
 ## Out of scope (deliberately cut — see PRD)
