@@ -8,12 +8,12 @@ agree on exactly one definition.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 
-class Label(str, Enum):
+class Label(StrEnum):
     """The fixed triage enum. The LLM output is normalized into this set so
     model drift / prompt-injection can't introduce new labels downstream."""
 
