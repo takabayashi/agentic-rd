@@ -20,8 +20,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://wiki:change-me@postgres:5432/wiki"
 
     # How many recent rows the dashboard fetches before filtering/sorting in the
-    # app. Bounds dashboard cost on a table the firehose will grow.
-    recent_window_limit: int = 200
+    # app. Bounds dashboard cost on a table the firehose will grow. Sized larger
+    # than ``feed_page_size`` so the infinite-scroll feed has older rows to load.
+    recent_window_limit: int = 500
+
+    # Rows rendered in the initial feed and per infinite-scroll page request.
+    feed_page_size: int = 100
 
     # Pool sizing + fail-fast timeouts so a missing/slow DB degrades to a 503
     # warm-up response instead of hanging a request.

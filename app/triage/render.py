@@ -16,18 +16,61 @@ import html
 from datetime import UTC, datetime
 from urllib.parse import quote
 
+from .config import get_settings
 from .models import EditView
 from .styles import DASHBOARD_CSS, WARMUP_CSS
 
 # Seconds between live-feed refreshes (client-side poll interval).
 _REFRESH_SECONDS = 5
 
+# Live poll refreshes the top page (newest rows); an IntersectionObserver
+# appends older pages as the user scrolls. The poll only swaps the dynamic
+# region *above* the table body so appended rows survive a refresh; new rows
+# arriving at the top flash. Both talk to /fragment/edits (server-rendered).
 _POLL_JS = """
 (function () {
   var FEED = document.getElementById('feed');
   var LIVE = document.getElementById('live');
   var INTERVAL = __REFRESH_MS__;
+  var loading = false;
 
+  function tbody() { return FEED.querySelector('tbody'); }
+  function sentinel() { return FEED.querySelector('#scroll-sentinel'); }
+  function search() { return window.location.search; }
+
+  // --- Infinite scroll: append the next page of older rows. ---
+  function loadMore() {
+    var s = sentinel();
+    if (loading || !s) return;
+    var off = s.dataset.next;
+    if (!off) return;
+    loading = true;
+    var sep = search() ? '&' : '?';
+    fetch('/fragment/rows' + search() + sep + 'offset=' + off, { headers: { 'X-Requested-With': 'fetch' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) {
+        var tb = tbody();
+        if (!tb) return;
+        s.remove();
+        tb.insertAdjacentHTML('beforeend', html);
+        loading = false;
+        observe();
+      })
+      .catch(function () { loading = false; });
+  }
+
+  var io = ('IntersectionObserver' in window)
+    ? new IntersectionObserver(function (entries) {
+        if (entries.some(function (e) { return e.isIntersecting; })) loadMore();
+      }, { rootMargin: '400px' })
+    : null;
+
+  function observe() {
+    var s = sentinel();
+    if (s && io) io.observe(s);
+  }
+
+  // --- Live poll: refresh the dynamic region (stats + filters + first page). ---
   function knownRevs() {
     var s = {};
     FEED.querySelectorAll('tr[data-rev]').forEach(function (tr) { s[tr.dataset.rev] = 1; });
@@ -37,7 +80,7 @@ _POLL_JS = """
   function tick() {
     if (document.hidden) return;
     var before = knownRevs();
-    fetch('/fragment/edits' + window.location.search, { headers: { 'X-Requested-With': 'fetch' } })
+    fetch('/fragment/edits' + search(), { headers: { 'X-Requested-With': 'fetch' } })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
       .then(function (html) {
         FEED.innerHTML = html;
@@ -45,10 +88,12 @@ _POLL_JS = """
           if (!before[tr.dataset.rev]) tr.classList.add('new');
         });
         if (LIVE) LIVE.classList.remove('off');
+        observe();
       })
       .catch(function () { if (LIVE) LIVE.classList.add('off'); });
   }
 
+  observe();
   setInterval(tick, INTERVAL);
 })();
 """.replace("__REFRESH_MS__", str(_REFRESH_SECONDS * 1000))
@@ -152,9 +197,25 @@ def _escalated_chip(count: int, active_label: str, escalated_active: bool) -> st
     return f'<a href="{_esc(href)}" class="{cls}">escalated<span class="n">{count}</span></a>'
 
 
-def _table(edits: list[EditView]) -> str:
+def _sentinel_row(next_offset: int | None) -> str:
+    """A hidden marker row the infinite-scroll observer watches. ``data-next``
+    is the offset of the next page; absent when there's nothing more to load."""
+
+    attr = f' data-next="{next_offset}"' if next_offset is not None else ""
+    return f'        <tr id="scroll-sentinel"{attr}><td colspan="8"></td></tr>'
+
+
+def _rows_html(edits: list[EditView], next_offset: int | None) -> str:
+    """Just the ``<tr>`` rows plus the scroll sentinel — the unit the
+    infinite-scroll fetch appends into the existing ``<tbody>``."""
+
     rows = "\n".join(_row(e) for e in edits)
-    return f"""    <table>
+    return rows + "\n" + _sentinel_row(next_offset)
+
+
+def _table(edits: list[EditView], next_offset: int | None) -> str:
+    return f"""    <div class="card-wrap">
+    <table>
       <thead>
         <tr>
           <th>Label</th><th>Conf.</th><th>Article</th><th>Δ bytes</th>
@@ -162,9 +223,10 @@ def _table(edits: list[EditView]) -> str:
         </tr>
       </thead>
       <tbody>
-{rows}
+{_rows_html(edits, next_offset)}
       </tbody>
-    </table>"""
+    </table>
+    </div>"""
 
 
 def _empty(active: str) -> str:
@@ -173,6 +235,22 @@ def _empty(active: str) -> str:
       No edits to show{scope}.<br />
       The pipeline may still be warming up, or this filter is empty.
     </p>"""
+
+
+def _page_size() -> int:
+    return get_settings().feed_page_size
+
+
+def render_rows(edits: list[EditView], offset: int) -> str:
+    """Render one infinite-scroll page: the ``<tr>`` rows for
+    ``edits[offset:offset+page]`` plus a sentinel pointing at the next offset
+    (or no ``data-next`` when the window is exhausted). ``edits`` is the full,
+    already filtered+ordered list."""
+
+    page = _page_size()
+    chunk = edits[offset : offset + page]
+    next_offset = offset + page if offset + page < len(edits) else None
+    return _rows_html(chunk, next_offset)
 
 
 def render_feed(
@@ -185,20 +263,28 @@ def render_feed(
     escalated_count: int = 0,
     newest_classified_at: datetime | None = None,
 ) -> str:
-    """Render the dynamic part of the dashboard (stats + filters + table).
+    """Render the dynamic part of the dashboard (stats + filters + first page).
 
     This is what the client poller swaps into ``#feed``; it is also embedded in
-    the initial page so the dashboard renders fully without JavaScript.
+    the initial page so the dashboard renders fully without JavaScript. ``edits``
+    is the full filtered+ordered list; only the first page is rendered here and
+    the infinite-scroll observer appends the rest from ``/fragment/rows``.
     """
 
+    page = _page_size()
+    first = edits[:page]
+    next_offset = page if page < len(edits) else None
     label_chips = "\n      ".join(
         _filter_chip(f, counts.get(f, 0), active, escalated_active) for f in filters
     )
     chips = label_chips + "\n      " + _escalated_chip(escalated_count, active, escalated_active)
-    body = _table(edits) if edits else _empty(active)
+    body = _table(first, next_offset) if first else _empty(active)
+    showing = (
+        f'<span class="stat">{len(first)}</span> of '
+        f'<span class="stat">{counts.get("all", 0)}</span> shown · '
+    )
     sub = (
-        f'<span class="stat">{counts.get("all", 0)}</span> classified · '
-        f'<span class="stat">{escalated_count}</span> escalated · '
+        showing + f'<span class="stat">{escalated_count}</span> escalated · '
         f"newest {_esc(_relative_time(newest_classified_at))} · "
         f"auto-refresh {_REFRESH_SECONDS}s"
     )
@@ -264,6 +350,7 @@ def render_warming_up() -> str:
 </head>
 <body>
   <div class="card">
+    <div class="spinner"></div>
     <h1>Database warming up</h1>
     <p>The data store isn't ready yet. This page retries automatically every few seconds.</p>
   </div>

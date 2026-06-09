@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .metrics import metrics_response
 from .models import EditView, Label, select_edits
-from .render import render_dashboard, render_feed, render_warming_up
+from .render import render_dashboard, render_feed, render_rows, render_warming_up
 from .repository import DatabaseUnavailable, check_ready, get_recent_edits
 
 router = APIRouter()
@@ -29,13 +29,23 @@ def _is_truthy(value: str | None) -> bool:
     return value is not None and value.lower() in ("1", "true", "yes", "on")
 
 
+def _selected_recent(
+    all_edits: list[EditView], label: str | None, escalated: str | None
+) -> list[EditView]:
+    """The filtered list ordered newest-first — the feed's full window, which the
+    renderer pages through for infinite scroll."""
+
+    active = label if label in FILTERS else "all"
+    return select_edits(all_edits, active, escalated_only=_is_truthy(escalated), order="recent")
+
+
 def _render_kwargs(all_edits: list[EditView], label: str | None, escalated: str | None) -> dict:
     """Shared view-model assembly for the full page and the live fragment."""
 
     active = label if label in FILTERS else "all"
     escalated_active = _is_truthy(escalated)
     return dict(
-        edits=select_edits(all_edits, active, escalated_only=escalated_active),
+        edits=_selected_recent(all_edits, label, escalated),
         filters=FILTERS,
         counts=_label_counts(all_edits),
         active=active,
@@ -65,6 +75,22 @@ def fragment_edits(label: str | None = None, escalated: str | None = None) -> HT
     except DatabaseUnavailable:
         return HTMLResponse("<p class='sub'>database warming up…</p>", status_code=503)
     return HTMLResponse(render_feed(**_render_kwargs(all_edits, label, escalated)))
+
+
+@router.get("/fragment/rows", response_class=HTMLResponse)
+def fragment_rows(
+    label: str | None = None, escalated: str | None = None, offset: int = 0
+) -> HTMLResponse:
+    """One infinite-scroll page of ``<tr>`` rows (plus the next-page sentinel),
+    newest-first. The client appends this into the existing ``<tbody>`` as the
+    user scrolls; the server stays the single source of row markup."""
+
+    try:
+        all_edits = get_recent_edits()
+    except DatabaseUnavailable:
+        return HTMLResponse("", status_code=503)
+    selected = _selected_recent(all_edits, label, escalated)
+    return HTMLResponse(render_rows(selected, max(offset, 0)))
 
 
 @router.get("/api/edits", response_model=None)
