@@ -1,38 +1,40 @@
 # Redpanda Connect unit tests for the shared classification parse.
-# Run with: make connect-test  (requires Docker; mirrors no app logic — it
-# exercises the actual Bloblang library used by the pipeline).
+# Paired with parse.yaml by the default `_benthos_test` suffix, so
+# `connect test /connect/tests/parse.yaml` discovers and runs these.
+# Run with: make connect-test  (requires Docker). Exercises the actual
+# Bloblang library used by the pipeline — no app-logic mirror.
 
 tests:
   - name: clean json parses through
-    target_processors: ""
+    target_processors: "/pipeline/processors"
     input_batch:
       - content: '{"label":"vandalism","confidence":0.9}'
     output_batches:
       - - bloblang: 'this.label == "vandalism" && this.confidence == 0.9'
 
   - name: prose-wrapped dirty json still parses
-    target_processors: ""
+    target_processors: "/pipeline/processors"
     input_batch:
       - content: 'Sure! {"label":"substantive","confidence":0.75} hope that helps'
     output_batches:
       - - bloblang: 'this.label == "substantive" && this.confidence == 0.75'
 
   - name: out-of-enum label normalizes to unclear and confidence clamps to 1
-    target_processors: ""
+    target_processors: "/pipeline/processors"
     input_batch:
       - content: '{"label":"SPAM","confidence":5}'
     output_batches:
       - - bloblang: 'this.label == "unclear" && this.confidence == 1'
 
   - name: negative confidence clamps to 0
-    target_processors: ""
+    target_processors: "/pipeline/processors"
     input_batch:
       - content: '{"label":"trivia","confidence":-2}'
     output_batches:
       - - bloblang: 'this.label == "trivia" && this.confidence == 0'
 
   - name: non-json defaults to unclear with zero confidence
-    target_processors: ""
+    target_processors: "/pipeline/processors"
     input_batch:
       - content: "totally not json"
     output_batches:
