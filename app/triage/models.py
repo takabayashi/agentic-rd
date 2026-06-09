@@ -36,6 +36,9 @@ class EditView(BaseModel):
     size_delta: int
     uri: str
     event_ts: datetime
+    # Why this row got its label: "classified" (the LLM decided) or "empty_diff"
+    # (the content gate skipped the model). Defaulted so older/seed rows are safe.
+    reason: str = "classified"
     classified_at: datetime
 
 

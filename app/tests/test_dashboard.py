@@ -70,6 +70,7 @@ def test_api_edits_returns_sorted_json():
         "size_delta",
         "uri",
         "event_ts",
+        "reason",
         "classified_at",
     }
     assert first["label"] in {"vandalism", "substantive", "trivia", "unclear"}
@@ -138,6 +139,23 @@ def test_dashboard_renders_all_labels_and_escalation():
     for label in ("vandalism", "substantive", "trivia", "unclear"):
         assert f"badge {label}" in html
     assert "escalated" in html
+
+
+def test_dashboard_shows_skipped_reason(monkeypatch):
+    gated = _edit(7, Label.unclear, 0.0, reason="empty_diff")
+    normal = _edit(8, Label.substantive, 0.9, reason="classified")
+    monkeypatch.setattr(web, "get_recent_edits", lambda *a, **k: [gated, normal])
+    html = client.get("/").text
+    # The gated row carries a visible "skipped" tag; a model-classified row does not.
+    assert 'class="reason"' in html
+    assert html.count('class="reason"') == 1
+
+
+def test_api_edits_exposes_reason(monkeypatch):
+    edits = [_edit(1, Label.unclear, 0.0, reason="empty_diff")]
+    monkeypatch.setattr(web, "get_recent_edits", lambda *a, **k: edits)
+    row = client.get("/api/edits").json()[0]
+    assert row["reason"] == "empty_diff"
 
 
 def test_dashboard_escapes_malicious_title(monkeypatch):

@@ -16,7 +16,7 @@ from .models import EditView
 
 _SELECT_RECENT = """
     SELECT rev_id, title, editor, comment, label, confidence,
-           escalated, size_delta, uri, event_ts, classified_at
+           escalated, size_delta, uri, event_ts, reason, classified_at
     FROM classified_edits
     ORDER BY event_ts DESC
     LIMIT %s

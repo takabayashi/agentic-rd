@@ -217,6 +217,16 @@ How it works:
   keeps only changed lines (`+` / `-` / `~`), truncates to ~4 KB, and puts
   `diff` in the enriched topic payload. The fetch fails **closed** (empty diff,
   classification still proceeds on metadata). Rate limit: `wiki_api`, 10/s.
+- **Content gate (avoid dumb model calls).** Before any inference, a `switch`
+  skips edits with no usable evidence: if the **cleaned** diff (whitespace
+  collapsed) is shorter than `DIFF_MIN_CHARS` **and** `|size_delta|` is below
+  `BLANKING_MIN_DELTA`, the edit is stamped `label=unclear`, `confidence=0`,
+  `reason=empty_diff` with **no** model call (and so no escalation either). The
+  `size_delta` guard deliberately exempts blanking / large removals (empty diff
+  but a big negative delta) so that vandalism case still reaches the model.
+  Gated rows aren't dropped — they appear on the dashboard tagged "skipped" and
+  can be corrected later by the `rev_id` UPSERT. Model-classified rows carry
+  `reason=classified`.
 - **Two passes (cost vs. accuracy).** Pass-1 classifies every survivor from the
   diff + metadata. A confidence `switch` then escalates only the ambiguous ones —
   `confidence < CONFIDENCE_THRESHOLD` (default `0.7`) **or** `label == unclear` —
@@ -447,6 +457,8 @@ so a fresh clone still runs with just `docker compose up`.
 | `WIKI_RATE_LIMIT` | `10` | enrich | MediaWiki compare-API calls/sec (politeness) |
 | `OLLAMA_MODEL` / `OLLAMA_ADDRESS` | `llama3.2` / `http://ollama:11434` | classify, pull | model + server (set host address on Apple Silicon) |
 | `CONFIDENCE_THRESHOLD` | `0.7` | classify | escalate edits below this confidence |
+| `DIFF_MIN_CHARS` | `1` | classify | content gate: cleaned-diff length below this is "empty" |
+| `BLANKING_MIN_DELTA` | `100` | classify | content gate: keep edits with `\|size_delta\|` ≥ this (blanking/large removals still hit the model) |
 
 **Secrets.** Credentials come only from env/`.env` (never tracked); SQL is
 parameterized and DSNs carry no creds in logs. For a real deployment, move the

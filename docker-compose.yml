@@ -208,6 +208,10 @@ services:
       OLLAMA_ADDRESS: ${OLLAMA_ADDRESS:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
       CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.7}
+      # Content gate: edits whose cleaned diff is shorter than DIFF_MIN_CHARS and
+      # whose |size_delta| is below BLANKING_MIN_DELTA skip the model (reason=empty_diff).
+      DIFF_MIN_CHARS: ${DIFF_MIN_CHARS:-1}
+      BLANKING_MIN_DELTA: ${BLANKING_MIN_DELTA:-100}
       POSTGRES_DSN: postgres://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}?sslmode=disable
     depends_on:
       ollama-pull:

@@ -25,6 +25,7 @@ from sqlalchemy import (
 metadata = MetaData()
 
 LABELS = ("vandalism", "substantive", "trivia", "unclear")
+REASONS = ("classified", "empty_diff")
 
 classified_edits = Table(
     "classified_edits",
@@ -39,6 +40,7 @@ classified_edits = Table(
     Column("size_delta", Integer, nullable=False, server_default=text("0")),
     Column("uri", Text, nullable=False),
     Column("event_ts", DateTime(timezone=True), nullable=False),
+    Column("reason", Text, nullable=False, server_default=text("'classified'")),
     Column("classified_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
     CheckConstraint(
         "label IN ('vandalism', 'substantive', 'trivia', 'unclear')",
@@ -47,6 +49,10 @@ classified_edits = Table(
     CheckConstraint(
         "confidence >= 0 AND confidence <= 1",
         name="classified_edits_confidence_check",
+    ),
+    CheckConstraint(
+        "reason IN ('classified', 'empty_diff')",
+        name="classified_edits_reason_check",
     ),
     Index("idx_classified_edits_event_ts", text("event_ts DESC")),
 )

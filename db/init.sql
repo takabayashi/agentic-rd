@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS classified_edits (
     size_delta    INTEGER          NOT NULL DEFAULT 0,
     uri           TEXT             NOT NULL,
     event_ts      TIMESTAMPTZ      NOT NULL,                -- ISO string from Bloblang, never raw epoch
+    -- Why this row got its label: 'classified' = the LLM decided; 'empty_diff' =
+    -- the content gate skipped the model (no usable diff) and defaulted unclear.
+    -- Lets the dashboard distinguish a model 'unclear' from a gated one.
+    reason        TEXT             NOT NULL DEFAULT 'classified'
+                  CHECK (reason IN ('classified', 'empty_diff')),
     classified_at TIMESTAMPTZ      NOT NULL DEFAULT now()
 );
 

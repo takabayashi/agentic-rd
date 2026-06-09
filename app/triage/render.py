@@ -95,12 +95,20 @@ def _title_cell(edit: EditView) -> str:
 def _row(edit: EditView) -> str:
     label = edit.label.value
     escalated = '<span class="esc">escalated</span>' if edit.escalated else ""
+    # Surface gate decisions: an "empty_diff" row was labelled without a model
+    # call (no usable diff), so flag it distinctly from a model-derived label.
+    reason = (
+        '<span class="reason" title="No usable diff — model skipped, defaulted unclear">'
+        "skipped</span>"
+        if edit.reason == "empty_diff"
+        else ""
+    )
     delta_cls = "pos" if edit.size_delta >= 0 else "neg"
     delta_sign = "+" if edit.size_delta >= 0 else ""
     return f"""        <tr data-rev="{edit.rev_id}">
           <td>
             <span class="badge {label}">{label}</span>
-            {escalated}
+            {escalated}{reason}
           </td>
           <td class="conf">{edit.confidence * 100:.0f}%</td>
           <td>{_title_cell(edit)}</td>

@@ -55,6 +55,11 @@ tbody tr:hover td { background: var(--panel-2); }
   background: color-mix(in srgb, var(--unclear) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--unclear) 45%, transparent); border-radius: 999px;
   padding: 1px 7px; margin-left: 6px; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.03em; }
+.reason { display: inline-block; font-size: 0.66rem; font-weight: 600; color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 999px;
+  padding: 1px 7px; margin-left: 6px; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.03em;
+  cursor: help; }
 .conf { font-variant-numeric: tabular-nums; font-weight: 600; }
 .delta.pos { color: var(--pos); } .delta.neg { color: var(--neg); }
 .delta { font-variant-numeric: tabular-nums; font-weight: 600; }
