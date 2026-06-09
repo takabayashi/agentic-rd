@@ -16,6 +16,14 @@ THRESHOLD     ?=
 LEVEL              ?=
 CONNECT_LOG_LEVEL ?=
 
+# Prefer the project venv when present — no need to `source .venv/bin/activate`.
+VENV_PYTHON := $(abspath $(wildcard .venv/bin/python))
+VENV_BIN    := $(if $(VENV_PYTHON),$(dir $(VENV_PYTHON)),)
+PYTHON      ?= $(if $(VENV_PYTHON),$(VENV_PYTHON),python3)
+PIP         ?= $(if $(VENV_BIN),$(VENV_BIN)pip,pip)
+RUFF        ?= $(if $(VENV_BIN),$(VENV_BIN)ruff,ruff)
+YAMLLINT    ?= $(if $(VENV_BIN),$(VENV_BIN)yamllint,yamllint)
+
 .DEFAULT_GOAL := help
 .PHONY: help start stop up up-fg down down-v restart restart-connect restart-webapp ps build \
         logs logs-connect diffs labels escalations errors psql ollama-check \
@@ -120,22 +128,22 @@ consume-audit: ## Consume from model.audit (N=3 to override count)
 
 ## --- Quality & tests ---
 
-install: ## Install app + dev Python deps (run inside your virtualenv)
-	pip install -r requirements-dev.txt
-	pip install -r $(APP_DIR)/requirements.txt
+install: ## Install app + dev Python deps (uses .venv when present)
+	$(PIP) install -r requirements-dev.txt
+	$(PIP) install -r $(APP_DIR)/requirements.txt
 
 test: ## Run the app test suite (pytest)
-	cd $(APP_DIR) && pytest -q
+	cd $(APP_DIR) && $(PYTHON) -m pytest -q
 
 lint: ## Ruff lint + format check
-	ruff check .
-	ruff format --check .
+	$(RUFF) check .
+	$(RUFF) format --check .
 
 fmt: ## Apply ruff formatting
-	ruff format .
+	$(RUFF) format .
 
 yamllint: ## Lint YAML files
-	yamllint .
+	$(YAMLLINT) .
 
 connect-lint: ## Validate all Connect pipeline configs
 	@for f in $(CONNECT_YAMLS); do \
