@@ -308,3 +308,17 @@ entries reference the ones they replace).
 - **Rationale / trade-offs:** Connect as the sink keeps everything in one config with no extra service to run — and directly feeds the brief's "Connect as the sink vs app-side writes" tradeoff. UPSERT requires `sql_raw` (the `sql_insert` output has no `ON CONFLICT`). Wrapping the SQL output in `retry` isolates transient Postgres downtime so it's retried, not fatal. Known `fan_out` caveat: if one output fails, the message is retried to *all* outputs, which can re-produce to Kafka — acceptable here because the classified topic is compacted by `rev_id` and the Postgres UPSERT is idempotent, so duplicates converge.
 - **Made by:** Agent
 - **Date:** 2026-06-08
+
+### (Implemented) Cap redpanda memory; Docker Desktop is the reference runtime
+- **Decision:** Start redpanda with `--memory=1G --reserve-memory=0M`, and document that the full stack needs a Docker VM with **≥ 4 GB**; Docker Desktop is the reference environment. On Apple Silicon, run Ollama on the host.
+- **Alternatives:** No memory cap (let dev-container auto-size to the VM); require a bumped Colima VM (`colima start --memory 6`); make host-Ollama the default.
+- **Rationale / trade-offs:** A ~1.9 GiB Colima VM **OOM-killed** redpanda (`ExitCode=137 OOMKilled=true`, crash-looping) — confirmed via `docker inspect`. Capping `--memory` makes redpanda a predictable citizen and protects smaller VMs, but it doesn't conjure RAM, so the real requirement is a ≥4 GB VM — which Docker Desktop provides by default (the whole stack was validated there). This also lines up with the Phase 5 finding that the containerized Ollama crashes under Colima's Virtualization.framework, so host Ollama remains the Mac path. Trade-off: Docker Desktop has licensing terms vs Colima's FOSS; both work, Colima just needs the memory bump + host Ollama.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
+### Dashboard UX for easier testing: freshness stats, escalated filter, article + diff links
+- **Decision:** Enrich the dashboard with a header stat line (total / escalated count / newest "N ago"), a per-row "Classified" relative-time column, an **escalated** filter chip combinable with the label chips (and `/api/edits?escalated=1`), separate **article** and **diff** links per row, and the `#rev_id`. No `EditView`/API-shape change — the article URL is derived in the renderer and `select_edits` gains an `escalated_only` flag.
+- **Alternatives:** Keep the minimal table; add a sort toggle (deferred); store the diff text on the row / fetch it on demand to show the changed text inline.
+- **Rationale / trade-offs:** Surfaces pipeline liveness, escalation behaviour, and enough per-edit context (links + rev id) to evaluate misclassifications without dropping to `psql`/`rpk` — directly the "make testing easier" ask. Keeping the API shape stable means existing tests/contract are untouched. The actual diff *text* stays in the `model.audit` topic (not Postgres); the diff link opens it on Wikipedia, and inline diff text is deferred as a heavier follow-up. Trade-off: a couple more columns on the table.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08

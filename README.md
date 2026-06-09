@@ -17,12 +17,22 @@ Field Deployed Engineer build exercise.
 ## Run
 
 ```bash
-docker compose up
+docker compose up        # or: make up   (run `make help` for all shortcuts)
 ```
 
-This starts Postgres (schema + seed applied automatically on first run), the
-web app, and the `connect` ingest pipeline. Open <http://localhost:8080> to see
-the triage dashboard, served from the seeded rows in [`db/seed.sql`](db/seed.sql).
+This starts Postgres (schema + seed applied automatically on first run), the web
+app, the Redpanda broker + Console, Ollama, and the `connect` pipeline. Open
+<http://localhost:8080> for the triage dashboard and <http://localhost:8090> for
+Redpanda Console. The dashboard fills with **live** classified edits once the
+pipeline is running (it shows the seeded rows in [`db/seed.sql`](db/seed.sql)
+until then).
+
+> **Memory / environment.** The full stack (broker + Console + Connect + DB + web
+> + Ollama) needs a Docker VM with **≥ 4 GB**. Docker Desktop defaults are fine
+> and are the reference environment; a tiny ~1.9 GB Colima VM will **OOM-kill**
+> redpanda (which is why redpanda is memory-capped in compose). On Apple Silicon,
+> run Ollama on the host (see Classification) — the containerized model can crash
+> under Colima.
 
 Health check:
 
@@ -36,13 +46,19 @@ page that auto-retries — the app never crashes on a cold or transient DB.
 ## Dashboard & API
 
 - `GET /` — HTML dashboard: a table of classified edits sorted by confidence
-  descending, with label-filter chips (`all/vandalism/substantive/trivia/unclear`)
-  and a 15-second auto-refresh. The page is rendered in plain Python (no
-  template engine); untrusted fields (title, comment, editor) are escaped with
-  `html.escape`, diff links are emitted only for `http(s)` URIs and carry
+  descending. A header stat line shows the total, the escalated count, and how
+  long ago the newest row was classified. Each row links to the **article page**
+  and the Wikipedia **diff** separately, shows the `#rev_id`, and a relative
+  "Classified" time so you can see rows arriving live. Label-filter chips
+  (`all/vandalism/substantive/trivia/unclear`) plus an **escalated** toggle
+  (combinable) narrow the table; 15-second auto-refresh. Rendered in plain Python
+  (no template engine); untrusted fields (title, comment, editor) are escaped
+  with `html.escape`, and links are emitted only for `http(s)` URIs with
   `rel="noopener noreferrer"`.
-- `GET /api/edits?label=<label>` — the same data as JSON, newest-highest-
-  confidence first. Omitting `label` (or `all`) returns everything. Each row:
+- `GET /api/edits?label=<label>&escalated=1` — the same data as JSON, newest-
+  highest-confidence first. `label` (one of `all|vandalism|substantive|trivia|
+  unclear`) and `escalated=1` both filter; omitting them returns everything.
+  Each row:
 
 ```json
 {
@@ -254,10 +270,24 @@ Ports: dashboard `8080`, Console `8090`.
 
 ## Develop / test
 
+A root [`Makefile`](Makefile) wraps the common workflow — run `make help` for the
+full list. Highlights:
+
 ```bash
-cd app
-pip install -r requirements.txt
-pytest
+make up            # docker compose up -d
+make logs-connect  # follow the pipeline
+make labels        # label distribution from the logs
+make escalations   # escalated:true vs false counts
+make diffs         # recent diff-fetch lines (rev_id + diff_chars)
+make topics        # list topics; make consume-classified / consume-audit
+make psql          # psql shell on Postgres
+make check         # ruff + yamllint + connect-lint + pytest (local CI)
+```
+
+Run the tests directly without Docker:
+
+```bash
+cd app && pip install -r requirements.txt && pytest    # or: make test
 ```
 
 Layout:
@@ -275,6 +305,7 @@ app/
   requirements.txt
 db/                  # init.sql (schema) + seed.sql
 connect/             # wikipedia.yaml (Redpanda Connect ingest pipeline)
+Makefile             # dev/test shortcuts (make help)
 ```
 
 ## Configuration

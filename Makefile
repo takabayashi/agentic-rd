@@ -12,6 +12,7 @@ THRESHOLD     ?=
 .DEFAULT_GOAL := help
 .PHONY: help up up-fg down down-v restart restart-connect restart-webapp ps build \
         logs logs-connect diffs labels escalations errors psql ollama-check \
+        topics consume-classified consume-audit console open health \
         install test lint fmt yamllint connect-lint check
 
 help: ## Show this help
@@ -74,6 +75,27 @@ ollama-check: ## Verify a reachable Ollama (host or container)
 	@curl -fsS $${OLLAMA_HOST:-http://localhost:11434}/api/tags >/dev/null \
 		&& echo "ollama reachable" \
 		|| echo "ollama NOT reachable - run 'ollama serve' (host) or check the container"
+
+health: ## Service status + redpanda OOM/state (the Phase 7 gotcha)
+	@$(COMPOSE) ps
+	@docker inspect agentic-rd-redpanda-1 --format 'redpanda: OOMKilled={{.State.OOMKilled}} status={{.State.Status}}' 2>/dev/null || true
+
+open: ## Open the dashboard (http://localhost:8080) in the browser
+	@open http://localhost:8080 2>/dev/null || xdg-open http://localhost:8080 2>/dev/null || echo "open http://localhost:8080"
+
+console: ## Open Redpanda Console (http://localhost:8090) in the browser
+	@open http://localhost:8090 2>/dev/null || xdg-open http://localhost:8090 2>/dev/null || echo "open http://localhost:8090"
+
+## --- Topics & broker ---
+
+topics: ## List Redpanda topics
+	$(COMPOSE) exec redpanda rpk topic list
+
+consume-classified: ## Consume from wiki.edits.classified (N=5 to override count)
+	$(COMPOSE) exec redpanda rpk topic consume wiki.edits.classified --num $(or $(N),5)
+
+consume-audit: ## Consume from model.audit (N=3 to override count)
+	$(COMPOSE) exec redpanda rpk topic consume model.audit --num $(or $(N),3)
 
 ## --- Quality & tests ---
 

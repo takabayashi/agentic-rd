@@ -193,6 +193,13 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 - [x] (Extension) Each classified edit emits an audit record on `model.audit` carrying both passes' raw input/output; topic uses time-retention (no compaction)
 - [x] Topic outputs use `zstd` compression (observable via reduced on-disk size / batch compression in Console or Redpanda metrics)
 
+> **Also shipped this pass (extras, beyond the original Phase 7 list):** a dev
+> `Makefile` (`make help`); redpanda memory cap + a Docker-Desktop reference-env
+> note (a ~1.9 GB Colima VM OOM-kills the broker); and dashboard UX for easier
+> testing — header freshness stats, a "Classified N ago" column, an escalated
+> filter (also `/api/edits?escalated=1`), and per-row article + diff links + rev
+> id. All logged in `docs/decisions.md`.
+
 ## Phase 8 — Focused automated tests
 
 > Goal: lock in the gnarly bits (parsing/edge cases) without a heavy harness.
