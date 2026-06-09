@@ -23,8 +23,8 @@ services:
   # and the classify sink start. Idempotent — the initial revision is a no-op on
   # a volume already bootstrapped by db/init.sql, then records the baseline.
   migrate:
-    build:
-      context: ./app
+    # Reuses webapp's image (same Dockerfile); only webapp declares build so
+    # Compose doesn't parallel-export two targets to agentic-rd-webapp:0.0.0.
     image: agentic-rd-webapp:0.0.0
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}
