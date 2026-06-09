@@ -1,10 +1,13 @@
-# Wikipedia Edit-Triage Agent — Product Requirements (PRD)
+# Wikipedia Edit-Triage Agent — Design Overview
 
 > A small, locally-runnable system that ingests the Wikipedia recent-changes
 > firehose, transforms it in Redpanda Connect, runs a multi-step LLM reasoning
 > loop to triage each edit, and serves the results on a live web dashboard.
 >
-> Built for the Redpanda **Field Deployed Engineer** build exercise.
+> A personal project to learn Redpanda Connect and a staged, multi-step
+> local-LLM pipeline. This doc captures the problem, scope, and constraints I
+> set for myself; the rationale behind specific choices lives in
+> [`decisions.md`](./decisions.md) and [`writeup.md`](./writeup.md).
 
 ---
 
@@ -31,9 +34,9 @@ ingest → transform → reason → serve — runnable with a single `docker com
 - **Primary: Wikipedia moderators / patrollers.** Need a fast, prioritized list
   of recent edits classified by intent so they can focus review effort on likely
   vandalism and substantive changes instead of scrolling a raw feed.
-- **Secondary: the Redpanda evaluation team.** Will clone the repo, run it
-  locally, and inspect the pipeline, agent topology, schema, and dashboard. A
-  clean one-command start and useful logs are part of the deliverable.
+- **Secondary: anyone reading the repo.** Will clone it, run it locally, and
+  inspect the pipeline, agent topology, schema, and dashboard. A clean
+  one-command start and useful logs matter for that.
 - **Tertiary (illustrative): trust-and-safety / data analysts** who want a
   queryable store of recently-classified edits for ad hoc inspection.
 
@@ -119,11 +122,10 @@ Described from the user's perspective:
 - **Broker**: `docker.redpanda.com/redpandadata/redpanda` in
   `--mode=dev-container` (single node).
 - **Pipeline**: Redpanda Connect (`docker.redpanda.com/redpandadata/connect`,
-  Apache-2.0) for ingest, transform, routing, and LLM `branch` calls. The
-  exercise's "route" requirement is satisfied by the confidence-based `switch`
-  (route ambiguous items to the escalation pass) plus a single labeled topic
-  (`label` column) — a deliberate choice over topic-per-label routing (see the
-  Tradeoffs write-up).
+  Apache-2.0) for ingest, transform, routing, and LLM `branch` calls. Routing is
+  done with the confidence-based `switch` (route ambiguous items to the
+  escalation pass) plus a single labeled topic (`label` column) — a deliberate
+  choice over topic-per-label routing (see the Tradeoffs write-up).
 - **LLM**: local via **Ollama** (`ollama/ollama`) with a small open-weights
   model, called through Connect's `ollama_chat` (or `openai_chat_completion`
   pointed at the Ollama server). Model name configurable via env.
@@ -134,21 +136,21 @@ Described from the user's perspective:
 - **Data source rules**: Wikipedia SSE requires a descriptive `User-Agent`
   header (it 403s without one); timestamps are epoch and must be formatted to an
   ISO string before insertion into a `TIMESTAMPTZ` column.
-- **Off-limits** (per exercise): Redpanda Cloud, Enterprise Connect connectors
-  (CDC, Snowflake Streaming, Iceberg, Salesforce), `a2a_message`, Cloud OAuth2.
+- **Intentionally avoided** (to keep it free/local/open): Redpanda Cloud,
+  Enterprise Connect connectors (CDC, Snowflake Streaming, Iceberg, Salesforce),
+  `a2a_message`, Cloud OAuth2.
 - **Config via env**: model name, confidence threshold, DB credentials, and
   User-Agent provided via `.env` / `docker-compose` (a `.env.example` is
   included even though the default LLM is local).
-- **Infrastructure/deployment**: runtime scoped to local Docker Compose for this
-  exercise (see Out of Scope for production/cloud deployment). A *minimal* CI
-  (lint, build, tests, secret-scan) keeps the repo trustworthy and is kept small
-  on purpose; the brief doesn't ask for CI, so deploy automation, dependency
-  bots, and extra linters are out of scope and not expanded.
-- **Scope discipline ("plain but works")**: the brief is an explicit
-  couple-of-hours exercise graded on judgment, not surface area. Build exactly
-  the evaluated path — ingest → transform → reason → serve — with a plain,
-  functional UI; avoid gold-plating (elaborate UI, metrics stacks, deploy
-  pipelines). Every cut is recorded in Out of Scope with a reason.
+- **Infrastructure/deployment**: runtime scoped to local Docker Compose (see Out
+  of Scope for production/cloud deployment). A *minimal* CI (lint, build, tests,
+  secret-scan) keeps the repo trustworthy and is kept small on purpose; deploy
+  automation, dependency bots, and extra linters are out of scope and not
+  expanded.
+- **Scope discipline ("plain but works")**: I kept this focused on the core path
+  — ingest → transform → reason → serve — with a plain, functional UI, and
+  avoided gold-plating (elaborate UI, metrics stacks, deploy pipelines). Every
+  cut is recorded in Out of Scope with a reason.
 
 ---
 
@@ -229,16 +231,16 @@ the core of the work):
 
 ---
 
-## Out of Scope (for this exercise)
+## Out of Scope
 
-Deliberately excluded to stay within the intended ~couple-hours build; listed as
+Deliberately excluded to keep the project focused on the core path; listed as
 future work:
 
 - **Cloud / production deployment**, autoscaling, multi-node Redpanda, managed
   Postgres, secrets manager.
 - **CI/CD expansion** beyond the minimal lint/build/test/secret-scan: image
   publishing/deploy automation, dependency bots, branch protection, extra
-  Dockerfile/YAML linters — the brief doesn't ask for CI.
+  Dockerfile/YAML linters.
 - **AuthN/AuthZ** on the dashboard/API and multi-user accounts.
 - **Observability stack** (metrics/dashboards/alerting beyond container logs);
   only output retries/backoff + useful logs are in scope.

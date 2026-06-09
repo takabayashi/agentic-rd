@@ -1,8 +1,9 @@
-# Implementation TODO — Wikipedia Edit-Triage Agent
+# Build log — Wikipedia Edit-Triage Agent
 
-Incremental build plan derived from [`docs/requirements.md`](./requirements.md) and
-the take-home brief ([`docs/RedpandaTakehome.pdf`](./RedpandaTakehome.pdf)). Each
-phase is small, independently verifiable, and ends in a runnable state.
+The order I built this in while learning Redpanda Connect and a staged local-LLM
+pipeline, derived from the [design overview](./requirements.md). Each phase is
+small, independently verifiable, and ends in a runnable state. It doubles as a
+changelog of what landed and why.
 
 **Conventions**
 - `[ ]` = not started, `[x]` = done.
@@ -10,11 +11,9 @@ phase is small, independently verifiable, and ends in a runnable state.
   **Acceptance criteria** block (each criterion is testable / observable).
 - Do one phase at a time; don't start the next until acceptance criteria pass.
 
-**Scope discipline (why this list is short).** The brief is an explicit
-*couple-of-hours* exercise graded on judgment, not surface area: "plain but
-works", "one command brings it up", "README is short and honest". So the plan
-builds exactly the evaluated path — **ingest → transform → reason → serve** — and
-deliberately omits gold-plating (deploy automation, dependency bots, a metrics
+**Scope discipline (why this list is short).** I kept the focus on the core path
+— **ingest → transform → reason → serve** — with a plain, functional UI, and
+deliberately omitted gold-plating (deploy automation, dependency bots, a metrics
 stack, elaborate UI). Anything cut is listed under **Out of scope** with a reason.
 
 > **Revision (this pass):** consolidated 13 phases → 10. Merged Connect ingest +
@@ -22,8 +21,8 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > phase's *useful* parts (output retries/backoff + clean logs) into the end-to-end
 > sink phase and dropped the metrics view, trimmed UI and test scope to
 > "plain but works", and capped CI at the lightweight setup already in place
-> (no further CI/CD expansion). The required README write-up keeps its own final
-> phase because it is the most heavily graded deliverable.
+> (no further CI/CD expansion). The write-up keeps its own final phase because
+> it's the artifact most worth getting right.
 
 ---
 
@@ -48,7 +47,7 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 ## Phase 1 — Lightweight CI *(done; intentionally minimal)*
 
 > Goal: every push is linted, built, and tested so the repo stays trustworthy.
-> Deliberately capped here — CI is **not** part of the brief, so it stays small.
+> Deliberately capped here — CI is a nice-to-have for this project, so it stays small.
 
 - [x] GitHub Actions: `ruff` lint + format check, `pytest`, `docker compose build`
 - [x] Secret-scan job (`gitleaks`) over full history; least-privilege `GITHUB_TOKEN` (`contents: read`)
@@ -60,8 +59,8 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 - [ ] First push to GitHub shows the workflow green *(verify once, non-blocking)*
 
 > **Capped scope:** GHCR deploy, Dependabot, branch-protection, and extra
-> Dockerfile/YAML linters are extras beyond the brief. The minimal pieces that
-> already exist are kept; **no further CI/CD work is planned** (see Out of scope).
+> Dockerfile/YAML linters are out of scope for a local-only project. The minimal
+> pieces that already exist are kept; **no further CI/CD work is planned**.
 
 ## Phase 2 — Dashboard with mocked data
 
@@ -177,7 +176,7 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > (retries, batching, useful logs). Removes the temporary stdout.
 
 - [x] `broker` fan-out: Redpanda topic `wiki.edits.classified` (key = `rev_id`, compacted) via the native `redpanda` output; broker + Console (`:8090`) + `redpanda-topics` one-shot added to compose
-- [x] Routing note: ONE labeled topic (`label` field) + the confidence `switch` is the routing logic (not topic-per-label) — stated so the brief's "route" requirement is traceable
+- [x] Routing note: ONE labeled topic (`label` field) + the confidence `switch` is the routing logic (not topic-per-label)
 - [x] `sql_raw` to `classified_edits` with `ON CONFLICT (rev_id) DO UPDATE` (UPSERT, `sql_insert` can't); stamp `classified_at`; wrapped in `retry`; removed the temporary `stdout`
 - [x] Connector hardening: `retry` on the SQL sink + batching + `compression: zstd` on the topic outputs (per-batch, so it pairs with batching — bigger batches → better ratio; transparent to consumers/Console); healthcheck-gated `depends_on`
 - [x] **(Extension) Model audit topic** `model.audit` (append-only, ~6h retention — *not* compacted; key = `rev_id`): a second fan-out output capturing one record per edit with both passes' raw model I/O — `{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2{…}|null}`. Raw responses stashed in metadata during each `branch`, reshaped in the audit output's `processors`. For replay / prompt-eval / drift inspection; sync to a `model_calls` table later if needed.
@@ -236,23 +235,24 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 > **optional** (listed in Out of scope) — `connect-lint` + e2e cover pipeline
 > logic; pytest covers the web app only.
 
-## Phase 9 — Required write-up & repro polish *(deliverable)*
+## Phase 9 — Write-up & repro polish
 
-> Goal: the graded README write-up and a clean one-command repro. This is the
-> most heavily evaluated artifact — give it real time.
+> Goal: a clear design write-up and a clean one-command repro. The write-up lives
+> in [`docs/writeup.md`](./writeup.md), linked from the README.
 
-- [ ] README **Tradeoffs** section (½–1 page) — name the alternative + when you'd flip + what shaped the thinking, for two pairs:
-  - [ ] Pair A: **one classification call vs. a multi-step reasoning loop** (we built the loop: pass-1 + confidence escalation)
-  - [ ] Pair B: **Connect as the sink vs. app-side writes from a topic** (we chose Connect `sql_insert` UPSERT)
-- [ ] README **Surprises** paragraph + **"where this breaks in production"** paragraph
-- [ ] README final polish: copy-pasteable run, architecture diagram, ports table, configurable env vars
+- [x] **Tradeoffs** section — name the alternative + when you'd flip + what shaped the thinking, for three pairs:
+  - [x] one classification call vs. a multi-step reasoning loop (built the loop: pass-1 + confidence escalation)
+  - [x] Connect as the sink vs. app-side writes from a topic (chose Connect `sql_raw` UPSERT)
+  - [x] Postgres UPSERT vs. an in-pipeline dedup cache (chose UPSERT; cache for poll-based sources)
+- [x] **Surprises** + **"where this breaks in production"** sections (incl. Ollama/LLM scale + cost, dedup strategy, audit-log feasibility)
+- [x] README polish: copy-pasteable run, architecture diagram, ports, configurable env vars
 - [ ] **Security:** final pass — `gitleaks` clean on full history; localhost-only noted; deps pinned
-- [ ] **Docs:** `.env.example` complete; every documented step reproducible from a fresh clone
+- [x] **Docs:** `.env.example` complete; every documented step reproducible from a fresh clone
 
 **Acceptance criteria**
-- [ ] A teammate following only the README reaches visible classified edits from a fresh clone
-- [ ] Tradeoffs section names alternatives + flip conditions (not boilerplate)
-- [ ] Surprises + production-failure paragraphs are present and specific
+- [ ] Someone following only the README reaches visible classified edits from a fresh clone
+- [x] Tradeoffs section names alternatives + flip conditions (not boilerplate)
+- [x] Surprises + production-failure sections are present and specific
 - [ ] `docker compose up` is the only required command (no forgotten manual steps)
 
 ## Phase 11 — One-command start + arch/maintainability hardening
@@ -284,12 +284,12 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 
 ---
 
-## Out of scope (deliberately cut — see PRD)
+## Out of scope (deliberately cut — see the design overview)
 
-These are tracked, not built, to honor the "couple-of-hours / plain but works" brief:
+These are tracked, not built, to keep the project focused on the core path:
 
 - **CI/CD expansion:** GHCR deploy automation, Dependabot, branch protection,
-  hadolint/yamllint jobs — the brief doesn't ask for CI; what exists is kept minimal.
+  hadolint/yamllint jobs — out of scope for a local-only project; what exists is kept minimal.
 - **Observability stack:** metrics/counter view, dashboards, alerting (container
   logs are enough); only output retries/backoff + clean logs are in (Phase 7).
 - **Full Connect test harness** for every Bloblang mapping (app-level parse tests

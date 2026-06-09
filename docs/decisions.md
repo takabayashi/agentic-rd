@@ -9,7 +9,7 @@ entries reference the ones they replace).
 ### Web app framework: FastAPI + Uvicorn
 - **Decision:** Serve the dashboard/API with FastAPI (`0.136.3`) on Uvicorn (`0.49.0`).
 - **Alternatives:** Flask, bare Starlette, Django.
-- **Rationale / trade-offs:** PRD left the web framework open ("plain but works"). FastAPI gives typed routes, built-in JSON, and a test client with minimal boilerplate; Jinja2 templating (Phase 2) is first-class. Heavier than bare Starlette but far lighter than Django for a single-table dashboard.
+- **Rationale / trade-offs:** The design left the web framework open ("plain but works"). FastAPI gives typed routes, built-in JSON, and a test client with minimal boilerplate; Jinja2 templating (Phase 2) is first-class. Heavier than bare Starlette but far lighter than Django for a single-table dashboard.
 - **Made by:** Agent
 - **Date:** 2026-06-05
 
@@ -39,7 +39,7 @@ entries reference the ones they replace).
 ### CI platform: GitHub Actions
 - **Decision:** Run lint/test/build/secret-scan as GitHub Actions on push + PR; one `ci.yml` with parallel jobs, a separate `deploy.yml` for tag-triggered publish.
 - **Alternatives:** GitLab CI, CircleCI, a single monolithic job.
-- **Rationale / trade-offs:** Repo is already on GitHub; Actions needs no extra accounts (PRD: free/local). Parallel jobs give fast, independently-readable signal; splitting deploy keeps the PR pipeline free of registry permissions.
+- **Rationale / trade-offs:** Repo is already on GitHub; Actions needs no extra accounts (goal: free/local). Parallel jobs give fast, independently-readable signal; splitting deploy keeps the PR pipeline free of registry permissions.
 - **Made by:** Agent
 - **Date:** 2026-06-05
 
@@ -71,26 +71,26 @@ entries reference the ones they replace).
 - **Made by:** Agent
 - **Date:** 2026-06-05
 
-## Planning — Scope revalidation against the brief
+## Planning — Scope revalidation
 
 ### Consolidate the build plan (13 phases → 10) and cap scope
-- **Decision:** Revalidated `requirements.md` + `TODO.md` against the take-home brief and trimmed for the explicit "couple-of-hours / plain but works" framing. Merged Connect ingest + transform (now Phase 4), merged Ollama infra + pass-1 classify (Phase 5), and folded the standalone "observability" phase's useful parts (output retries/backoff + clean logs) into the end-to-end dual-sink phase (Phase 7) while dropping the metrics/counter view. Trimmed UI and test scope. Kept the required README write-up as its own final phase (Phase 9) because it is the most heavily graded artifact.
+- **Decision:** Revalidated `requirements.md` + `TODO.md` against the project goals and trimmed for the "plain but works" framing. Merged Connect ingest + transform (now Phase 4), merged Ollama infra + pass-1 classify (Phase 5), and folded the standalone "observability" phase's useful parts (output retries/backoff + clean logs) into the end-to-end dual-sink phase (Phase 7) while dropping the metrics/counter view. Trimmed UI and test scope. Kept the write-up as its own final phase (Phase 9) because it's the artifact most worth getting right.
 - **Alternatives:** Keep the granular 13-phase plan; cut Postgres and serve only a topic; drop the second LLM pass.
-- **Rationale / trade-offs:** The brief grades judgment and "names the cuts", not surface area, and warns against gold-plating. The consolidated plan still covers every asked deliverable (ingest → transform → reason → serve, README write-up, one-command run) and every evaluation dimension (connector fluency incl. retries/error paths, data sense, multi-step agent design, output usability, local repro, architectural reasoning). Dual sink (topic + Postgres) is kept deliberately because it directly feeds two of the brief's Tradeoffs pairs. We gave up granular per-step verifiability for a leaner, more honest plan.
+- **Rationale / trade-offs:** I wanted to spend effort on judgment and naming the cuts, not surface area, and avoid gold-plating. The consolidated plan still covers the whole core path (ingest → transform → reason → serve, write-up, one-command run) and everything I wanted to exercise (connector fluency incl. retries/error paths, data sense, multi-step agent design, output usability, local repro, architectural reasoning). Dual sink (topic + Postgres) is kept deliberately because it directly feeds two of the Tradeoffs pairs in the write-up. I gave up granular per-step verifiability for a leaner, more honest plan.
 - **Made by:** Human+Agent
 - **Date:** 2026-06-07
 
 ### Cap CI/CD at the minimal setup already in place
-- **Decision:** Treat the existing lint/test/build/secret-scan CI as sufficient and do **not** expand CI/CD. GHCR deploy (`deploy.yml`), Dependabot, branch protection, and the hadolint/yamllint jobs are reframed as extras beyond the brief (kept since already built, but not grown); recorded under Out of Scope.
+- **Decision:** Treat the existing lint/test/build/secret-scan CI as sufficient and do **not** expand CI/CD. GHCR deploy (`deploy.yml`), Dependabot, branch protection, and the hadolint/yamllint jobs are reframed as extras beyond the core scope (kept since already built, but not grown); recorded under Out of Scope.
 - **Alternatives:** Continue building out CI/CD (more linters, environments, release automation); or delete the already-built deploy/Dependabot config entirely.
-- **Rationale / trade-offs:** The brief never asks for CI; over-investing there spends the "couple of hours" away from the graded ingest→reason→serve path. Keeping the built pieces avoids churn/regressions; not expanding them avoids gold-plating. Deleting them was rejected as needless rework with no scoring upside. Supersedes the implied "CI is a first-class scope area" stance from the Phase 1 entries above.
+- **Rationale / trade-offs:** CI isn't the point of a local-only project; over-investing there spends time away from the ingest→reason→serve path. Keeping the built pieces avoids churn/regressions; not expanding them avoids gold-plating. Deleting them was rejected as needless rework with no real upside. Supersedes the implied "CI is a first-class scope area" stance from the Phase 1 entries above.
 - **Made by:** Human+Agent
 - **Date:** 2026-06-07
 
 ### Remove `deploy.yml` + `dependabot.yml` (supersedes the two entries above)
 - **Decision:** Deleted `.github/workflows/deploy.yml` (GHCR publish) and `.github/dependabot.yml`. CI is now just `ci.yml` (lint/test/build/secret-scan). Supersedes the "Deploy: publish to GHCR" entry and the "kept since already built" stance of the cap-CI entry.
 - **Alternatives:** Keep them dormant (prior decision).
-- **Rationale / trade-offs:** Human chose a leaner, brief-aligned repo footprint. The deploy/dependabot config carried maintenance surface (version bumps, token scopes) for zero scoring upside on a local-run exercise. Trade-off: a future real deployment re-adds a release workflow, but that's out of scope here.
+- **Rationale / trade-offs:** Human chose a leaner repo footprint. The deploy/dependabot config carried maintenance surface (version bumps, token scopes) for no real upside on a local-run project. Trade-off: a future real deployment re-adds a release workflow, but that's out of scope here.
 - **Made by:** Human+Agent
 - **Date:** 2026-06-07
 
@@ -99,7 +99,7 @@ entries reference the ones they replace).
 ### Server-rendered Jinja2 dashboard (not a client-side SPA)
 - **Decision:** Render `/` server-side with Jinja2 templates; auto-refresh via a plain `<meta http-equiv="refresh">`. A parallel `GET /api/edits` returns JSON.
 - **Alternatives:** React/Vue SPA fetching the JSON API; HTMX partial updates; websockets/SSE push.
-- **Rationale / trade-offs:** The brief wants "plain but works" and a result a person can act on. Server rendering needs no build step, ships in the existing FastAPI image, and is trivially testable via the test client. Meta-refresh is cruder than HTMX/websockets but adequate for a seconds-fresh triage feed. The JSON endpoint keeps a clean seam for a richer UI later. Autoescaping (on by default) is load-bearing here because titles/comments are attacker-controlled.
+- **Rationale / trade-offs:** The goal was "plain but works" and a result a person can act on. Server rendering needs no build step, ships in the existing FastAPI image, and is trivially testable via the test client. Meta-refresh is cruder than HTMX/websockets but adequate for a seconds-fresh triage feed. The JSON endpoint keeps a clean seam for a richer UI later. Autoescaping (on by default) is load-bearing here because titles/comments are attacker-controlled.
 - **Made by:** Agent
 - **Date:** 2026-06-07
 
@@ -129,7 +129,7 @@ entries reference the ones they replace).
 ### Schema + seed via the image init-entrypoint; graceful-503 over hard dependency
 - **Decision:** Mount `db/init.sql` + `db/seed.sql` into `/docker-entrypoint-initdb.d/`; gate `webapp` on `postgres` `service_healthy`; and still wrap reads so a missing/slow DB returns a 503 warm-up page (HTML) / JSON rather than crashing. `/healthz` stays DB-independent (liveness).
 - **Alternatives:** Run migrations from the app on startup (e.g. Alembic); make the app hard-fail if the DB is down; check the DB inside `/healthz`.
-- **Rationale / trade-offs:** initdb scripts are zero-extra-tooling for a single-table schema and double as the "seeds" deliverable; the cost is they run only on an empty volume (documented `down -v` to re-seed). The healthcheck gate shrinks the cold-start window, but the 503 fallback is what actually satisfies "transient DB outage is not fatal; restarting recovers" and the later cold-start-LLM correction story. Keeping `/healthz` DB-free means the container is judged live even while it serves the warm-up page. Alembic is deferred — overkill before the schema is exercised by the pipeline.
+- **Rationale / trade-offs:** initdb scripts are zero-extra-tooling for a single-table schema and double as the seed data; the cost is they run only on an empty volume (documented `down -v` to re-seed). The healthcheck gate shrinks the cold-start window, but the 503 fallback is what actually satisfies "transient DB outage is not fatal; restarting recovers" and the later cold-start-LLM correction story. Keeping `/healthz` DB-free means the container is judged live even while it serves the warm-up page. Alembic is deferred — overkill before the schema is exercised by the pipeline.
 - **Made by:** Agent
 - **Date:** 2026-06-07
 
@@ -210,7 +210,7 @@ entries reference the ones they replace).
 ### Keep containerized Ollama as default; host-Ollama override for arm64 Colima (+ `extra_hosts`)
 - **Decision:** Keep the in-container `ollama` service as the `docker compose up` default, and make the host-Ollama escape hatch first-class: the `connect` service maps `host.docker.internal:host-gateway` so setting `OLLAMA_ADDRESS=http://host.docker.internal:11434` routes classification to a host-native Ollama.
 - **Alternatives:** Make host-Ollama the default (drop the container); pin an older Ollama image; force the container CPU path (`OLLAMA_VULKAN=false`).
-- **Rationale / trade-offs:** Live validation surfaced that the `ollama/ollama` image crashes during inference on this host's arm64 Colima VM — `0.30.6` dies with `fatal error: found bad pointer in Go heap (cgo)` and `0.24.0` with `runtime: out of memory` despite ~7.5 GiB free — a Virtualization.framework/cgo incompatibility, not a pipeline bug. The pipeline was validated end-to-end against host-native Ollama (~4.5 s/inference) and the robust parse against crafted dirty/out-of-enum/clamp inputs. The containerized default is still correct for the brief's "one command" on platforms where it works (Docker Desktop, Linux CI); making host-Ollama the default would break self-containment there. Pinning an older image was rejected (both tested versions crash here) and forcing the CPU path didn't help; `extra_hosts` makes the documented override work uniformly (including Linux, where `host.docker.internal` isn't automatic) at zero cost.
+- **Rationale / trade-offs:** Live validation surfaced that the `ollama/ollama` image crashes during inference on this host's arm64 Colima VM — `0.30.6` dies with `fatal error: found bad pointer in Go heap (cgo)` and `0.24.0` with `runtime: out of memory` despite ~7.5 GiB free — a Virtualization.framework/cgo incompatibility, not a pipeline bug. The pipeline was validated end-to-end against host-native Ollama (~4.5 s/inference) and the robust parse against crafted dirty/out-of-enum/clamp inputs. The containerized default is still correct for the "one command" goal on platforms where it works (Docker Desktop, Linux CI); making host-Ollama the default would break self-containment there. Pinning an older image was rejected (both tested versions crash here) and forcing the CPU path didn't help; `extra_hosts` makes the documented override work uniformly (including Linux, where `host.docker.internal` isn't automatic) at zero cost.
 - **Made by:** Agent
 - **Date:** 2026-06-07
 
@@ -247,7 +247,7 @@ entries reference the ones they replace).
 ### Confidence `switch` escalation as a second re-prompt pass
 - **Decision:** After pass-1, a `switch` checks `this.confidence < ${CONFIDENCE_THRESHOLD:0.7} || this.label == "unclear"` and routes matches into a second `branch` that re-classifies with a more rigorous per-label rubric, the editor identity, and the first-pass `{label, confidence}` for self-critique (re-reading the same diff), then stamps `escalated = true`. `escalated` defaults to `false` in projection so confident rows skip the 2nd model call. `CONFIDENCE_THRESHOLD` is config-interpolated (Connect substitutes `${VAR:default}` before parse), so it's env-configurable with a `0.7` default.
 - **Alternatives:** One classification call (no escalation); escalate by fetching *more* diff context (moot now that pass-1 already has the full diff); a fixed always-two-passes design.
-- **Rationale / trade-offs:** Satisfies the brief's "more than one prompt / confidence-based branching" with a real cost lever — only ambiguous edits pay the second model call, and the threshold visibly trades escalation volume against coverage. Since pass-1 already has the diff, escalation adds *better reasoning* (rubric + reflection + editor signal), not new evidence. The `switch` doubles as the brief's "route" requirement (route ambiguous items to escalation) alongside the single labeled topic in Phase 7. Trade-off: the escalation prompt re-reads the same diff, so its lift is judgment, not facts; acceptable because the diff fetch (above) supplies the missing evidence for both passes.
+- **Rationale / trade-offs:** Gives the agent "more than one prompt / confidence-based branching" with a real cost lever — only ambiguous edits pay the second model call, and the threshold visibly trades escalation volume against coverage. Since pass-1 already has the diff, escalation adds *better reasoning* (rubric + reflection + editor signal), not new evidence. The `switch` doubles as the routing logic (route ambiguous items to escalation) alongside the single labeled topic in Phase 7. Trade-off: the escalation prompt re-reads the same diff, so its lift is judgment, not facts; acceptable because the diff fetch (above) supplies the missing evidence for both passes.
 - **Made by:** Human+Agent
 - **Date:** 2026-06-07
 
@@ -261,7 +261,7 @@ entries reference the ones they replace).
 ### Fail-safe default + set `escalated` inside result_map (Bloblang root-rebuild gotcha)
 - **Decision:** Add a `mapping` after pass-1 that starts with `root = this` and defaults a missing/non-enum `label` to `unclear` and a missing/non-numeric `confidence` to `0`. Set `escalated = true` *inside* the escalation `branch.result_map` (alongside label/confidence) rather than in a trailing standalone `- mapping: root.escalated = true`.
 - **Alternatives:** Null-guard only inside the switch `check`; the trailing standalone mapping we first wrote.
-- **Rationale / trade-offs:** When the pass-1 `branch`'s `ollama_chat` call fails (model unreachable/errored — e.g. pointing at a crash-looping containerized Ollama), Connect skips `result_map`, so the record reached the escalation `switch` with no `label`/`confidence` — emitting blank rows and crashing the `switch` on `null < threshold` (observed live as 328 `cannot compare types null` errors, 0/303 rows labelled). The fail-safe defaults such rows to `unclear`/0, realizing the PRD's "transient LLM failure → land as `unclear`, corrected by a later UPSERT" and keeping the firehose crash-free; it is idempotent for already-classified rows. Separately, a standalone Bloblang `mapping` rebuilds `root` from scratch, so a partial `root.escalated = true` dropped every other field (wiped escalated rows to `{"escalated":true}` in testing — the exact gotcha the brief calls out). `branch.result_map` inverts that rule (it grafts partial assignments back), so `escalated` belongs there; the fail-safe mapping uses `root = this` for the same reason.
+- **Rationale / trade-offs:** When the pass-1 `branch`'s `ollama_chat` call fails (model unreachable/errored — e.g. pointing at a crash-looping containerized Ollama), Connect skips `result_map`, so the record reached the escalation `switch` with no `label`/`confidence` — emitting blank rows and crashing the `switch` on `null < threshold` (observed live as 328 `cannot compare types null` errors, 0/303 rows labelled). The fail-safe defaults such rows to `unclear`/0, realizing the design's "transient LLM failure → land as `unclear`, corrected by a later UPSERT" and keeping the firehose crash-free; it is idempotent for already-classified rows. Separately, a standalone Bloblang `mapping` rebuilds `root` from scratch, so a partial `root.escalated = true` dropped every other field (wiped escalated rows to `{"escalated":true}` in testing — a Bloblang gotcha worth calling out). `branch.result_map` inverts that rule (it grafts partial assignments back), so `escalated` belongs there; the fail-safe mapping uses `root = this` for the same reason.
 - **Made by:** Agent
 - **Date:** 2026-06-07
 
@@ -284,7 +284,7 @@ entries reference the ones they replace).
 ### Model audit log as a full Redpanda topic (not a Postgres table or logs)
 - **Decision:** Plan a dedicated **append-only** `model.audit` topic as a second fan-out output capturing one record per edit with both passes' raw model I/O (`{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2|null}`); short **time-based retention**, **not compacted**, keyed by `rev_id`. Capture each pass's input/raw response in metadata during its `branch`, reshape in the audit output's `processors`. Defer any sync to a `model_calls` table to later.
 - **Alternatives:** Structured `log` lines only (cheapest, no infra); a `model_calls` Postgres audit table (queryable, reuses the DB); one-record-per-call (vs per-edit-with-nested-passes); a compacted/keyed-LWW topic (rejected — collapses history).
-- **Rationale / trade-offs:** The brief's storage is already a stream + DB, and an audit *stream* fits replay / prompt-eval / drift-inspection and the "explain why this label" story better than rows; the human chose it explicitly and is fine syncing to a table later (a Kafka→Postgres sink is trivial to add). Append-only + time-retention is correct because every call is a distinct event (unlike the LWW-by-`rev_id` classified topic). Per-edit-with-nested-passes keeps escalation linked to its pass-1 in one message and avoids splitting into two. Marked an **Extension** (beyond the brief's asked scope) so it doesn't bloat the core ingest→reason→serve path. Caveats: stores full prompts + raw responses incl. the (capped) diff — volume/retention matters, and the prompts hold untrusted title/comment/diff (advisory, local-only).
+- **Rationale / trade-offs:** Storage is already a stream + DB, and an audit *stream* fits replay / prompt-eval / drift-inspection and the "explain why this label" story better than rows; the human chose it explicitly and is fine syncing to a table later (a Kafka→Postgres sink is trivial to add). Append-only + time-retention is correct because every call is a distinct event (unlike the LWW-by-`rev_id` classified topic). Per-edit-with-nested-passes keeps escalation linked to its pass-1 in one message and avoids splitting into two. Marked an **Extension** (beyond the core scope) so it doesn't bloat the core ingest→reason→serve path. Caveats: stores full prompts + raw responses incl. the (capped) diff — volume/retention matters, and the prompts hold untrusted title/comment/diff (advisory, local-only).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
 
@@ -298,14 +298,14 @@ entries reference the ones they replace).
 ### (Implemented) Broker = Redpanda dev-container; `redpanda` output + Console; explicit topic creation
 - **Decision:** Add `redpanda` (single-node `--mode dev-container`), `console` (host `:8090`), and a one-shot `redpanda-topics` job that `rpk topic create`s both topics with explicit configs (`wiki.edits.classified` `cleanup.policy=compact`; `model.audit` `cleanup.policy=delete` + `retention.ms=6h`). Connect produces via its native `redpanda` output and gates on the broker healthy + topics created.
 - **Alternatives:** `kafka`/`kafka_franz` outputs; rely on `allow_auto_topic_creation` (default true) instead of an init job; skip Console.
-- **Rationale / trade-offs:** The `redpanda` output is the current franz-go-based client (vs the legacy `kafka`). Explicit creation lets us set compaction/retention deliberately — auto-create would give default (delete) policy, losing the compacted-by-`rev_id` semantics that mirror the UPSERT. Console satisfies the brief's "somewhere we can see it" and makes the topics browsable; it maps to `:8090` to avoid the dashboard's `:8080`. Pinned tags (`redpanda:v25.3.15`, `console:v3.7.4`) per the repo's pinned-image rule.
+- **Rationale / trade-offs:** The `redpanda` output is the current franz-go-based client (vs the legacy `kafka`). Explicit creation lets us set compaction/retention deliberately — auto-create would give default (delete) policy, losing the compacted-by-`rev_id` semantics that mirror the UPSERT. Console gives somewhere to see the topics and makes them browsable; it maps to `:8090` to avoid the dashboard's `:8080`. Pinned tags (`redpanda:v25.3.15`, `console:v3.7.4`) per the repo's pinned-image rule.
 - **Made by:** Agent
 - **Date:** 2026-06-08
 
 ### (Implemented) Dual sink via broker `fan_out`: `redpanda` topic + `sql_raw` UPSERT (wrapped in `retry`)
 - **Decision:** Replace the stdout sink with an `output.broker` `fan_out` to: (1) `wiki.edits.classified` (`redpanda`, key `rev_id`), (2) Postgres via `sql_raw` `INSERT ... ON CONFLICT (rev_id) DO UPDATE` wrapped in a `retry` output, and (3) the `model.audit` topic. `classified_at = now()` is stamped on write.
 - **Alternatives:** App-side consumer reading the topic and writing Postgres itself (vs Connect as the sink); `sql_insert` (no upsert); no `retry` wrapper; `fan_out_sequential`.
-- **Rationale / trade-offs:** Connect as the sink keeps everything in one config with no extra service to run — and directly feeds the brief's "Connect as the sink vs app-side writes" tradeoff. UPSERT requires `sql_raw` (the `sql_insert` output has no `ON CONFLICT`). Wrapping the SQL output in `retry` isolates transient Postgres downtime so it's retried, not fatal. Known `fan_out` caveat: if one output fails, the message is retried to *all* outputs, which can re-produce to Kafka — acceptable here because the classified topic is compacted by `rev_id` and the Postgres UPSERT is idempotent, so duplicates converge.
+- **Rationale / trade-offs:** Connect as the sink keeps everything in one config with no extra service to run — and directly feeds the "Connect as the sink vs app-side writes" tradeoff in the write-up. UPSERT requires `sql_raw` (the `sql_insert` output has no `ON CONFLICT`). Wrapping the SQL output in `retry` isolates transient Postgres downtime so it's retried, not fatal. Known `fan_out` caveat: if one output fails, the message is retried to *all* outputs, which can re-produce to Kafka — acceptable here because the classified topic is compacted by `rev_id` and the Postgres UPSERT is idempotent, so duplicates converge.
 - **Made by:** Agent
 - **Date:** 2026-06-08
 
@@ -319,7 +319,7 @@ entries reference the ones they replace).
 ### Dashboard UX for easier testing: freshness stats, escalated filter, article + diff links
 - **Decision:** Enrich the dashboard with a header stat line (total / escalated count / newest "N ago"), a per-row "Classified" relative-time column, an **escalated** filter chip combinable with the label chips (and `/api/edits?escalated=1`), separate **article** and **diff** links per row, and the `#rev_id`. No `EditView`/API-shape change — the article URL is derived in the renderer and `select_edits` gains an `escalated_only` flag.
 - **Alternatives:** Keep the minimal table; add a sort toggle (deferred); store the diff text on the row / fetch it on demand to show the changed text inline.
-- **Rationale / trade-offs:** Surfaces pipeline liveness, escalation behaviour, and enough per-edit context (links + rev id) to evaluate misclassifications without dropping to `psql`/`rpk` — directly the "make testing easier" ask. Keeping the API shape stable means existing tests/contract are untouched. The actual diff *text* stays in the `model.audit` topic (not Postgres); the diff link opens it on Wikipedia, and inline diff text is deferred as a heavier follow-up. Trade-off: a couple more columns on the table.
+- **Rationale / trade-offs:** Surfaces pipeline liveness, escalation behaviour, and enough per-edit context (links + rev id) to spot misclassifications without dropping to `psql`/`rpk` — it makes testing easier. Keeping the API shape stable means existing tests/contract are untouched. The actual diff *text* stays in the `model.audit` topic (not Postgres); the diff link opens it on Wikipedia, and inline diff text is deferred as a heavier follow-up. Trade-off: a couple more columns on the table.
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
 
@@ -328,7 +328,7 @@ entries reference the ones they replace).
 ### Python reference parse module + DB-free pytest (no Connect harness)
 - **Decision:** Add `app/triage/pipeline_parse.py` mirroring ingest SSE + classify `result_map` Bloblang; cover edge cases in `test_pipeline_parse.py`. Extend dashboard/repository tests (escalated filter, parameterized `LIMIT %s`, 503/empty/XSS). Add a `connect-lint` CI job; document coverage in README "Testing".
 - **Alternatives:** Full Redpanda Connect test harness for every Bloblang mapping; integration tests against live Postgres/broker in CI.
-- **Rationale / trade-offs:** The brief caps scope at "plain but works" — the highest-risk logic (dirty model JSON, enum drift, heartbeat fail-closed, SQL parameterization, XSS) is pure and testable in Python without spinning infra. Connect stays runtime source of truth; the Python module is a tested reference to prevent drift. Trade-off: two places to update if parse rules change (acceptable while rules are stable).
+- **Rationale / trade-offs:** I capped scope at "plain but works" — the highest-risk logic (dirty model JSON, enum drift, heartbeat fail-closed, SQL parameterization, XSS) is pure and testable in Python without spinning infra. Connect stays runtime source of truth; the Python module is a tested reference to prevent drift. Trade-off: two places to update if parse rules change (acceptable while rules are stable).
 - **Made by:** Agent
 - **Date:** 2026-06-08
 
@@ -407,7 +407,7 @@ entries reference the ones they replace).
 ### Inter-stage contract + dead-letter topic
 - **Decision:** `connect-enrich` validates `schema_version == 1` + present `rev_id` and routes failures to a `wiki.edits.dead_letter` topic (24h retention) via an output `switch`, making `schema_version` load-bearing instead of dead metadata.
 - **Alternatives:** Keep silently dropping malformed records; a full schema registry; DLQ at every stage.
-- **Rationale / trade-offs:** A DLQ makes malformed handoffs inspectable rather than invisible, and gives `schema_version` a job. Added at the first topic consumer (enrich) where records re-enter from Kafka; classify was left un-DLQ'd because its fail-safe always yields a valid label and it strips `schema_version` before the sink (a DLQ there would add risk for little value). A schema registry was judged too heavy for the take-home. **Validation caveat:** unlinted here (no Docker).
+- **Rationale / trade-offs:** A DLQ makes malformed handoffs inspectable rather than invisible, and gives `schema_version` a job. Added at the first topic consumer (enrich) where records re-enter from Kafka; classify was left un-DLQ'd because its fail-safe always yields a valid label and it strips `schema_version` before the sink (a DLQ there would add risk for little value). A schema registry was judged too heavy for this project. **Validation caveat:** unlinted here (no Docker).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
 

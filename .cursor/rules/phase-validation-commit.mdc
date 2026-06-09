@@ -16,10 +16,9 @@ Give the user explicit, copy-paste commands that map to the phase's
 **Acceptance criteria**, plus what a passing result looks like. Example:
 
 ```bash
-source .venv/bin/activate
-python -m podcast_agent hello   # expect: banner prints, exit 0
-pytest -q                       # expect: all tests pass
-ruff check .                    # expect: All checks passed!
+make test          # expect: all tests pass
+make check         # expect: lint + yamllint + connect-lint + tests pass
+docker compose up  # expect: dashboard fills with live classified edits
 ```
 
 Then ask the user to confirm validation passed (use the AskQuestion tool when

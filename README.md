@@ -4,14 +4,17 @@
 
 A locally-runnable system that ingests the Wikipedia recent-changes firehose,
 triages each edit with a multi-step LLM reasoning loop (Redpanda Connect +
-Ollama), and serves the results on a live dashboard. Built for the Redpanda
-Field Deployed Engineer build exercise.
+Ollama), and serves the results on a live dashboard. A personal project to learn
+Redpanda Connect and a staged, multi-step local-LLM pipeline end to end.
 
-> Status: **Phase 10** — staged pipeline. Three Redpanda Connect services
-> communicate via compacted topics: **ingest** (SSE → `wiki.edits.raw`) →
-> **enrich** (diff fetch → `wiki.edits.enriched`) → **classify** (Ollama
-> pass-1 + escalation → `wiki.edits.classified`, Postgres UPSERT, `model.audit`).
-> Browse all topics in Console at <http://localhost:8090>.
+> Architecture: a staged pipeline. Three Redpanda Connect services communicate
+> via compacted topics: **ingest** (SSE → `wiki.edits.raw`) → **enrich** (diff
+> fetch → `wiki.edits.enriched`) → **classify** (Ollama pass-1 + escalation →
+> `wiki.edits.classified`, Postgres UPSERT, `model.audit`). Browse all topics in
+> Console at <http://localhost:8090>.
+
+> The design rationale — tradeoffs, surprises, and where this would break in
+> production — lives in [`docs/writeup.md`](docs/writeup.md).
 
 ## Run
 
@@ -129,7 +132,7 @@ docker compose exec postgres psql -U wiki -d wiki -c "SELECT rev_id, label, conf
 `label` (TEXT + CHECK enum `vandalism|substantive|trivia|unclear`), `confidence`
 (0–1), `escalated`, `size_delta`, `uri`, `event_ts` (TIMESTAMPTZ), `classified_at`.
 
-`rev_id` is the primary key so the pipeline (Phase 9) can UPSERT
+`rev_id` is the primary key so the pipeline can UPSERT
 (`ON CONFLICT (rev_id) DO UPDATE`): a row first classified `unclear` on a
 cold-start/transient failure is corrected in place by a later, more confident
 pass — no duplicates, no PK collisions. The `label` CHECK rejects any
@@ -236,7 +239,7 @@ How it works:
   skips `result_map` when a branch's inner call fails) — falls back to `unclear`
   via a fail-safe default, so a row is never emitted with an empty label and the
   escalation `switch` never compares a null confidence. A later, more confident
-  pass corrects the row via the Postgres UPSERT (Phase 7). On a noisy firehose
+  pass corrects the row via the Postgres UPSERT. On a noisy firehose
   this keeps latency/cost bounded and self-corrects, which we prefer over
   blocking retries (we'd flip if classifications were authoritative).
 - **Local LLM via Ollama.** A pinned `ollama` service serves the model; a
@@ -321,9 +324,9 @@ make consume-classified N=5
 make consume-audit N=2
 ```
 
-- **Routing.** The brief's "route" requirement is met by the confidence `switch`
-  (routing ambiguous edits to the escalation pass) plus a single labeled topic
-  (the `label` field) — a deliberate choice over topic-per-label.
+- **Routing.** Routing is handled by the confidence `switch` (routing ambiguous
+  edits to the escalation pass) plus a single labeled topic (the `label` field) —
+  a deliberate choice over topic-per-label.
 - **Compression.** Producer-side `zstd` on the topic outputs (text JSON +
   wikitext diffs compress well), paired with batching for a better ratio;
   transparent to Console/consumers.
@@ -461,8 +464,8 @@ production secret posture.
 
 Every push and pull request runs a deliberately small GitHub Actions workflow
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) with least-privilege
-`GITHUB_TOKEN` permissions (`contents: read`). The brief doesn't ask for CI, so
-this is kept minimal — just enough to keep the repo trustworthy. Jobs:
+`GITHUB_TOKEN` permissions (`contents: read`). CI is intentionally minimal —
+just enough to keep the repo trustworthy. Jobs:
 
 | Job        | What it checks                                              |
 |------------|------------------------------------------------------------|
