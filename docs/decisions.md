@@ -323,6 +323,15 @@ entries reference the ones they replace).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
 
+## Phase 8 — Focused automated tests
+
+### Python reference parse module + DB-free pytest (no Connect harness)
+- **Decision:** Add `app/triage/pipeline_parse.py` mirroring ingest SSE + classify `result_map` Bloblang; cover edge cases in `test_pipeline_parse.py`. Extend dashboard/repository tests (escalated filter, parameterized `LIMIT %s`, 503/empty/XSS). Add a `connect-lint` CI job; document coverage in README "Testing".
+- **Alternatives:** Full Redpanda Connect test harness for every Bloblang mapping; integration tests against live Postgres/broker in CI.
+- **Rationale / trade-offs:** The brief caps scope at "plain but works" — the highest-risk logic (dirty model JSON, enum drift, heartbeat fail-closed, SQL parameterization, XSS) is pure and testable in Python without spinning infra. Connect stays runtime source of truth; the Python module is a tested reference to prevent drift. Trade-off: two places to update if parse rules change (acceptable while rules are stable).
+- **Made by:** Agent
+- **Date:** 2026-06-08
+
 ## Phase 10 — Staged Connect pipeline (topics as protocol)
 
 ### Split monolith into three Connect services on compacted topics

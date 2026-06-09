@@ -222,14 +222,14 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 
 > Goal: lock in the gnarly bits (parsing/edge cases) without a heavy harness.
 
-- [ ] App unit tests: label filter, parameterized query, JSON serialization, empty + 503 states, and HTML-escapes-a-malicious-`<script>` title
-- [ ] Parse/normalize tests for the agent's robust-output logic: dirty-JSON → first `{...}`, enum-drift → `unclear`, heartbeat dropped (not passed through)
-- [ ] Wire tests into the CI `test` job
-- [ ] **Security:** the escaping test doubles as an XSS regression guard
-- [ ] **Docs:** README "Testing" section — how to run + what's covered
+- [x] App unit tests: label filter, parameterized query, JSON serialization, empty + 503 states, and HTML-escapes-a-malicious-`<script>` title
+- [x] Parse/normalize tests for the agent's robust-output logic: dirty-JSON → first `{...}`, enum-drift → `unclear`, heartbeat dropped (not passed through)
+- [x] Wire tests into the CI `test` job (+ `connect-lint` job for pipeline YAMLs)
+- [x] **Security:** the escaping test doubles as an XSS regression guard
+- [x] **Docs:** README "Testing" section — how to run + what's covered
 
 **Acceptance criteria**
-- [ ] `pytest` passes locally and in CI; each edge case above has ≥1 assertion
+- [x] `pytest` passes locally and in CI; each edge case above has ≥1 assertion
 - [ ] CI fails if any test fails (verify with a temporary deliberate break, then revert)
 
 > Full Redpanda Connect test-harness coverage of every Bloblang mapping is

@@ -289,11 +289,29 @@ make psql          # psql shell on Postgres
 make check         # ruff + yamllint + connect-lint + pytest (local CI)
 ```
 
-Run the tests directly without Docker:
+### Testing
+
+Tests are **DB-free**: the pytest suite mocks `get_recent_edits` with an in-memory
+fixture, so `make test` / CI never need Postgres or the broker running.
 
 ```bash
-cd app && pip install -r requirements.txt && pytest    # or: make test
+make install   # app + dev deps (in your virtualenv)
+make test      # pytest in app/
+make check     # full local CI mirror (lint + connect-lint + test)
 ```
+
+**What's covered**
+
+| Area | Module / file | Edge cases |
+|------|----------------|------------|
+| Dashboard & API | `tests/test_dashboard.py` | label + escalated filters, JSON shape, empty state, 503 warm-up, XSS escape on title |
+| Health | `tests/test_health.py` | `/healthz` liveness |
+| Repository | `tests/test_repository.py` | parameterized `LIMIT %s`, `DatabaseUnavailable` mapping |
+| Pipeline parse | `tests/test_pipeline_parse.py` + `triage/pipeline_parse.py` | dirty JSON → first `{...}`, enum drift → `unclear`, confidence clamp, SSE heartbeat dropped |
+
+`pipeline_parse.py` mirrors the Bloblang in `connect/ingest.yaml` and
+`connect/classify.yaml` so the gnarly parse logic is asserted in Python without
+a Connect test harness. Connect remains the runtime source of truth.
 
 Layout:
 

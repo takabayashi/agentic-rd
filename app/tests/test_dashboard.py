@@ -45,6 +45,14 @@ def test_select_edits_filters_by_label():
     assert len(select_edits(edits, None)) == 2
 
 
+def test_select_edits_filters_escalated_only():
+    edits = [
+        _edit(1, Label.vandalism, 0.9, escalated=True),
+        _edit(2, Label.trivia, 0.6, escalated=False),
+    ]
+    assert [e.rev_id for e in select_edits(edits, escalated_only=True)] == [1]
+
+
 def test_api_edits_returns_sorted_json():
     rows = client.get("/api/edits").json()
     assert len(rows) >= 4
@@ -72,6 +80,18 @@ def test_api_edits_returns_sorted_json():
 def test_api_edits_label_filter():
     rows = client.get("/api/edits", params={"label": "vandalism"}).json()
     assert rows and all(r["label"] == "vandalism" for r in rows)
+
+
+def test_api_edits_escalated_filter(monkeypatch):
+    edits = [
+        _edit(1, Label.vandalism, 0.9, escalated=True),
+        _edit(2, Label.trivia, 0.6, escalated=False),
+    ]
+    monkeypatch.setattr(web, "get_recent_edits", lambda *a, **k: edits)
+    rows = client.get("/api/edits", params={"escalated": "1"}).json()
+    assert len(rows) == 1
+    assert rows[0]["rev_id"] == 1
+    assert rows[0]["escalated"] is True
 
 
 def test_dashboard_renders_all_labels_and_escalation():
