@@ -1,16 +1,21 @@
 """Integration test: the repository against a real Postgres.
 
-Spins up a throwaway Postgres with testcontainers, applies the schema from
-``triage.schema``, inserts a row, and exercises ``get_recent_edits`` /
-``check_ready`` end-to-end (real psycopg, real SQL, real pool). Skipped
-automatically when Docker isn't available so unit CI stays infra-free; run it
-where Docker is present (locally or a Docker-enabled CI job).
+Spins up a throwaway Postgres with testcontainers, applies ``db/init.sql``,
+inserts a row, and exercises ``get_recent_edits`` / ``check_ready`` end-to-end
+(real psycopg, real SQL, real pool). Skipped automatically when Docker isn't
+available so unit CI stays infra-free; run it where Docker is present (locally
+or a Docker-enabled CI job).
 """
 
+from pathlib import Path
+
+import psycopg
 import pytest
 
 testcontainers_postgres = pytest.importorskip("testcontainers.postgres")
 from testcontainers.postgres import PostgresContainer  # noqa: E402
+
+_INIT_SQL = Path(__file__).resolve().parents[2] / "db" / "init.sql"
 
 
 @pytest.fixture(scope="module")
@@ -40,13 +45,9 @@ def repo(pg_url, monkeypatch):
     config.get_settings.cache_clear()
     repository.close_pool()
 
-    # Create the schema from the single SQLAlchemy source.
-    from sqlalchemy import create_engine
-    from triage.schema import metadata
-
-    engine = create_engine(pg_url.replace("postgresql://", "postgresql+psycopg://", 1))
-    metadata.create_all(engine)
-    engine.dispose()
+    with psycopg.connect(pg_url) as conn:
+        conn.execute(_INIT_SQL.read_text())
+        conn.commit()
 
     yield repository
 
@@ -55,8 +56,6 @@ def repo(pg_url, monkeypatch):
 
 
 def _insert_sample(url: str) -> None:
-    import psycopg
-
     with psycopg.connect(url) as conn:
         conn.execute(
             """

@@ -2,37 +2,21 @@ services:
   postgres:
     image: postgres:16.14
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-wiki}
-      POSTGRES_USER: ${POSTGRES_USER:-wiki}
-      # Local-only default; change it for any non-throwaway use (see README).
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: wiki
+      POSTGRES_USER: wiki
+      POSTGRES_PASSWORD: change-me
     volumes:
       # Schema + seed run once, on first init of an empty data dir.
       - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wiki} -d ${POSTGRES_DB:-wiki}"]
+      test: ["CMD-SHELL", "pg_isready -U wiki -d wiki"]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 5s
     restart: unless-stopped
-
-  # One-shot: apply Alembic migrations (forward schema evolution) before the app
-  # and the classify sink start. Idempotent — the initial revision is a no-op on
-  # a volume already bootstrapped by db/init.sql, then records the baseline.
-  migrate:
-    # Reuses webapp's image (same Dockerfile); only webapp declares build so
-    # Compose doesn't parallel-export two targets to agentic-rd-webapp:0.0.0.
-    image: agentic-rd-webapp:0.0.0
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command: ["alembic", "upgrade", "head"]
-    restart: "no"
 
   webapp:
     build:
@@ -56,15 +40,14 @@ services:
       - path: .env
         required: false
     environment:
-      # Built from POSTGRES_* so .env stays optional; app reads DATABASE_URL only.
-      DATABASE_URL: postgresql://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}
+      DATABASE_URL: postgresql://wiki:change-me@postgres:5432/wiki
     volumes:
       # Overlay the baked image with live source so edits don't need a rebuild.
       - ./app/triage:/app/triage
       - ./app/static:/app/static
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
@@ -212,14 +195,14 @@ services:
       # whose |size_delta| is below BLANKING_MIN_DELTA skip the model (reason=empty_diff).
       DIFF_MIN_CHARS: ${DIFF_MIN_CHARS:-1}
       BLANKING_MIN_DELTA: ${BLANKING_MIN_DELTA:-100}
-      POSTGRES_DSN: postgres://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}?sslmode=disable
+      POSTGRES_DSN: postgres://wiki:change-me@postgres:5432/wiki?sslmode=disable
     depends_on:
       ollama-pull:
         condition: service_completed_successfully
       redpanda-topics:
         condition: service_completed_successfully
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:

@@ -459,12 +459,10 @@ flowchart TD
   root --> compose["docker-compose.yml"]
 
   app --> pkg["triage/ package"]
-  app --> migrations["migrations/ alembic"]
   app --> tests["tests/ pytest + integration"]
   pkg --> main["main.py root + metrics + JSON logs"]
   pkg --> config["config.py pydantic-settings"]
   pkg --> models["models.py EditView + Label"]
-  pkg --> schema["schema.py SQLAlchemy table"]
   pkg --> repo["repository.py psycopg pool + check_ready"]
   pkg --> web["web.py routes + fragment + metrics"]
   pkg --> render["render.py HTML + live poller"]
@@ -472,7 +470,7 @@ flowchart TD
   connect --> ctests["tests/ Bloblang harness"]
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  class start,app,pkg,migrations,main,config,models,schema,repo,web,render,tests,db,connect,lib,ctests,compose,gh,docs done;
+  class start,app,pkg,main,config,models,repo,web,render,tests,db,connect,lib,ctests,compose,gh,docs done;
         </pre>
       </div>
     </div>
@@ -738,7 +736,7 @@ classDiagram
   <section id="lifecycle">
     <div class="section-card">
       <h2><span class="num">08</span> Service lifecycle and startup ordering</h2>
-      <p class="desc">Compose gates services on healthchecks. A one-shot <code>migrate</code> (alembic) runs after Postgres is healthy and gates the webapp + classify. Webapp serves a 503 warm-up page when Postgres is down; <code>/healthz</code> is liveness-only, <code>/readyz</code> checks the DB.</p>
+      <p class="desc">Compose gates services on healthchecks. Postgres applies <code>db/init.sql</code> on first boot; webapp and classify wait for a healthy Postgres. Webapp serves a 503 warm-up page when Postgres is down; <code>/healthz</code> is liveness-only, <code>/readyz</code> checks the DB.</p>
       <div class="diagram">
         <pre class="mermaid">
 stateDiagram-v2
@@ -756,18 +754,17 @@ stateDiagram-v2
       <div class="diagram">
         <pre class="mermaid">
 flowchart LR
-  pg[("postgres healthy")] --> migrate["migrate alembic upgrade head"]
-  migrate --> webapp["webapp :8080"]
+  pg[("postgres healthy")] --> webapp["webapp :8080"]
+  pg --> classify["connect-classify"]
   ollama["ollama healthy"] --> pull["ollama-pull completed"]
   rp["redpanda healthy"] --> topics["redpanda-topics created"]
   topics --> ingest["connect-ingest"]
   topics --> enrich["connect-enrich"]
-  pull --> classify["connect-classify"]
+  pull --> classify
   topics --> classify
-  migrate --> classify
 
   classDef done fill:#05966922,stroke:#059669,color:#059669;
-  class pg,migrate,webapp,ollama,pull,rp,topics,ingest,enrich,classify done;
+  class pg,webapp,ollama,pull,rp,topics,ingest,enrich,classify done;
         </pre>
       </div>
     </div>

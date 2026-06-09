@@ -460,6 +460,13 @@ entries reference the ones they replace).
 - **Made by:** Human+Agent
 - **Date:** 2026-06-08
 
+### Drop Alembic; static local DB password
+- **Decision:** Remove Alembic (`migrate` compose service, `triage/schema.py`, `migrations/`, dependency). Schema lives only in `db/init.sql` (first-boot init). Local Postgres credentials are fixed in `docker-compose.yml` (`wiki` / `change-me`); removed `ensure_db_password` from `start.sh`.
+- **Alternatives:** Keep Alembic for forward migrations; keep generated `POSTGRES_PASSWORD` in `.env`.
+- **Rationale / trade-offs:** Alembic and password-generation added operational complexity (migrate ordering, volume/password mismatch footguns) for a disposable local demo where schema changes are rare and resolved with `docker compose down -v`. The schema-contract test now guards `EditView` ↔ `init.sql` only; integration tests apply `init.sql` directly. Supersedes the Phase-11 Alembic and volume-aware password decisions.
+- **Made by:** Human+Agent
+- **Date:** 2026-06-08
+
 ### Dashboard infinite scroll (newest-first feed, server-rendered pages)
 - **Decision:** The dashboard feed now orders **newest-first** (`select_edits(order="recent")`, by `classified_at`), renders the first `FEED_PAGE_SIZE` (100) rows, and loads older rows on demand via an `IntersectionObserver` that fetches server-rendered `<tr>` pages from a new `GET /fragment/rows?offset=` endpoint and appends them to the existing `<tbody>`. A hidden sentinel row carries `data-next` (the next offset; absent when exhausted). `RECENT_WINDOW_LIMIT` raised 200→500 so older pages exist to scroll into. The existing 5s live poll still refreshes the top (stats + filters + first page) and flashes newly-arrived rows.
 - **Alternatives:** Client-side row rendering from `/api/edits` JSON (would duplicate the escape/link/badge logic the server already owns — an XSS-surface and drift risk); a "Load more" button (less fluid); classic pagination (worse for a live feed); keeping confidence-first ordering (kept as the API/`select_edits` default, but a time-ordered feed is the natural fit for infinite scroll).

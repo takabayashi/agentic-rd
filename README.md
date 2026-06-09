@@ -140,17 +140,11 @@ non-throwaway use.
 The dashboard's empty state shows automatically whenever the table has no rows
 (for example, on a fresh volume before the pipeline runs).
 
-**Migrations (forward schema evolution).** Beyond the first-boot bootstrap, the
-schema is owned by [Alembic](https://alembic.sqlalchemy.org/) — a single
-SQLAlchemy table definition in [`app/triage/schema.py`](app/triage/schema.py) is
-the source, and a one-shot `migrate` compose service runs `alembic upgrade head`
-before the app and the classify sink start. The initial revision uses an
-idempotent `create_all(checkfirst=True)`, so it's a safe no-op on a volume
-already bootstrapped by `db/init.sql` and simply records the baseline; future
-schema changes ship as new revisions under
-[`app/migrations/versions/`](app/migrations/versions/). A schema-contract test
+**Schema.** [`db/init.sql`](db/init.sql) creates the table on first Postgres
+boot (empty volume). A schema-contract test
 ([`app/tests/test_schema_contract.py`](app/tests/test_schema_contract.py)) keeps
-`EditView`, `db/init.sql`, and `triage.schema` from drifting apart.
+`EditView` and `db/init.sql` in sync. Schema changes are applied by editing
+`init.sql` and recreating the volume (`docker compose down -v`).
 
 ## Pipeline (staged: topics as protocol)
 
@@ -405,7 +399,7 @@ make check     # full local CI mirror (lint + yamllint + connect-lint + test)
 | Dashboard & API | `tests/test_dashboard.py` | label + escalated filters, pagination, JSON shape, empty state, 503 warm-up, XSS escape, live-feed fragment |
 | Health/metrics | `tests/test_health.py` | `/healthz` liveness, `/readyz` ready/down, `/metrics` exposition |
 | Repository | `tests/test_repository.py` | parameterized `LIMIT %s`, `DatabaseUnavailable` mapping, `check_ready` |
-| Schema contract | `tests/test_schema_contract.py` | `EditView` ↔ `db/init.sql` ↔ `triage.schema` agree |
+| Schema contract | `tests/test_schema_contract.py` | `EditView` ↔ `db/init.sql` agree |
 | Integration | `tests/test_integration_db.py` | real Postgres via testcontainers (skips if Docker absent) |
 
 Connect Bloblang now has a real unit-test harness too: `make connect-test` runs
@@ -424,14 +418,12 @@ app/
     main.py          # composition root: app + router + metrics + JSON logging
     config.py        # typed settings (pydantic-settings)  (config)
     models.py        # EditView + Label enum + select_edits()  (domain)
-    schema.py        # SQLAlchemy table = Alembic schema source  (data)
     repository.py    # Postgres access: get_recent_edits, check_ready  (data)
     web.py           # HTTP layer: dashboard, /fragment/edits, /api/edits, /healthz, /readyz, /metrics
     render.py        # plain-Python HTML rendering (links the static assets)
     metrics.py       # Prometheus middleware + /metrics payload
     logging_config.py # one-line JSON logging
   static/            # dashboard assets served at /static (dashboard.css/js, warmup.css)
-  migrations/        # Alembic env + versions/ (forward schema evolution)
   tests/             # pytest suite + sample_data fixture
   Dockerfile
   requirements.txt
@@ -442,15 +434,14 @@ Makefile             # dev/test shortcuts (make help)
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust as needed (`./start.sh` does this for
-you on first run, and also generates a random `POSTGRES_PASSWORD` so local runs
-don't use the well-known `change-me`). `.env` is gitignored — no secrets are
-committed. `.env` is optional: `docker-compose.yml` supplies safe local defaults,
-so a fresh clone still runs with just `docker compose up`.
+Copy `.env.example` to `.env` and adjust as needed (`./start.sh` does this on
+first run). `.env` is gitignored. `.env` is optional — `docker-compose.yml`
+uses fixed local DB credentials (`wiki` / `change-me`) and supplies defaults
+for everything else, so a fresh clone runs with just `docker compose up`.
 
 | Variable | Default | Used by | Purpose |
 |----------|---------|---------|---------|
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `wiki` / `change-me` / `wiki` | postgres, app, migrate, classify | DB credentials (compose builds `DATABASE_URL`/`POSTGRES_DSN`) |
+| *(fixed in compose)* `wiki` / `change-me` / `wiki` | — | postgres, app, classify | Local-only DB credentials baked into `docker-compose.yml` |
 | `RECENT_WINDOW_LIMIT` | `200` | app | recent rows fetched before in-app filter/sort |
 | `WIKI_USER_AGENT` | repo default | ingest, enrich | Wikipedia requires a descriptive UA (403 otherwise) |
 | `DIFF_MAX_CHARS` | `4000` | enrich | truncate fetched diffs to this many chars |

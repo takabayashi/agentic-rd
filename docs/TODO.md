@@ -269,18 +269,18 @@ stack, elaborate UI). Anything cut is listed under **Out of scope** with a reaso
 - [x] Typed config (`triage/config.py`, pydantic-settings); lazy single-pool repository; `check_ready()`
 - [x] Observability: `/metrics` (Prometheus) + JSON logging; Connect `prometheus` metrics on all stages (classify `:4195`); `/readyz`
 - [x] Live-feed poller (`/fragment/edits`) replacing meta-refresh; `/api/edits` pagination; CSS extracted to `styles.py`
-- [x] Alembic migrations (`triage/schema.py` source, `migrate` one-shot service, additive/idempotent)
+- [x] ~~Alembic migrations~~ dropped — `db/init.sql` only; static local DB password
 - [x] Inter-stage `schema_version` contract + `wiki.edits.dead_letter` topic (enrich)
 - [x] Named tunables: `RECENT_WINDOW_LIMIT`, `DIFF_MAX_CHARS`, `WIKI_RATE_LIMIT`
 - [x] Tests: schema-contract, `/readyz` + `/metrics`, testcontainers Postgres integration, Connect Bloblang harness (`make connect-test`); both wired into CI
-- [x] Generated local `POSTGRES_PASSWORD`; secrets/`model.audit` retention notes (README)
+- [x] Static local DB password (`change-me` in compose); secrets/`model.audit` retention notes (README)
 - [x] Docs: README (one-command, observability, migrations, dead-letter, config table), `decisions.md`, this file
 
 **Acceptance criteria**
 - [x] `ruff check` / `ruff format --check` / `yamllint` / `pytest` pass locally (26 passed, 2 integration skipped without Docker)
 - [ ] `make connect-lint` + `make connect-test` pass *(needs Docker — not run in the authoring env)*
 - [ ] `./start.sh` brings the full stack up to a healthy dashboard from a fresh clone *(needs Docker)*
-- [ ] `docker compose up` runs the `migrate` job, dashboard fills with live classified edits, dead-letter stays empty for well-formed records *(needs Docker)*
+- [ ] `docker compose up` brings the stack up, dashboard fills with live classified edits, dead-letter stays empty for well-formed records *(needs Docker)*
 
 ---
 
