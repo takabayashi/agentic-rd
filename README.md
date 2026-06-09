@@ -35,6 +35,23 @@ flowchart LR
 The full rationale — tradeoffs, surprises, and where this breaks in production —
 is in [`docs/writeup.md`](docs/writeup.md).
 
+## Prerequisites
+
+- **Docker** with Compose v2 — runs the whole stack. [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+  is the reference environment (its defaults give a ≥ 4 GB VM). [Colima](https://github.com/abiosoft/colima)
+  works too, but start it with more memory: `colima start --memory 4`.
+- **git** — to clone the repo (the `curl | bash` installer does this for you).
+- **[Ollama](https://ollama.com/) on the host** — *only on Apple Silicon.* The
+  containerized model can crash under Colima, so run Ollama natively
+  (`brew install ollama`) and point Connect at it; see
+  [`docs/pipeline.md`](docs/pipeline.md). On Docker Desktop / Linux the bundled
+  `ollama` container is used and nothing extra is needed.
+- **Python 3.12 + make** — *only for local dev* (running tests/lint outside
+  containers). Not needed just to run the stack.
+
+Everything else (Postgres, Redpanda + Console, Ollama, the LLM model, Connect)
+is pulled and run as pinned containers by Compose — no manual installs.
+
 ## Run
 
 **From a fresh machine** (clones the repo, then starts everything):
