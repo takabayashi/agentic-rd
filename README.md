@@ -7,22 +7,32 @@ triages each edit with a multi-step LLM reasoning loop (Redpanda Connect +
 Ollama), and serves the results on a live dashboard. Built for the Redpanda
 Field Deployed Engineer build exercise.
 
-> Status: **Phase 6** — a Redpanda Connect pipeline ingests and transforms the
-> live Wikipedia firehose, fetches each edit's real diff, and classifies it with
-> a local Ollama model (pass-1 `{label, confidence}`) plus a confidence-based
-> escalation pass for ambiguous edits — currently to stdout; the dashboard still
-> serves seeded Postgres rows. The topic/UPSERT sink lands in Phase 7 (see
-> [`docs/TODO.md`](docs/TODO.md)).
+> Status: **Phase 7** — end-to-end. A Redpanda Connect pipeline ingests and
+> transforms the live Wikipedia firehose, fetches each edit's real diff,
+> classifies it with a local Ollama model (pass-1 + confidence-based escalation),
+> then **fans out** to a Redpanda topic (`wiki.edits.classified`), a Postgres
+> UPSERT (the dashboard's source), and an append-only model-audit topic
+> (`model.audit`). Browse the topics in Console at <http://localhost:8090>.
 
 ## Run
 
 ```bash
-docker compose up
+docker compose up        # or: make up   (run `make help` for all shortcuts)
 ```
 
-This starts Postgres (schema + seed applied automatically on first run), the
-web app, and the `connect` ingest pipeline. Open <http://localhost:8080> to see
-the triage dashboard, served from the seeded rows in [`db/seed.sql`](db/seed.sql).
+This starts Postgres (schema + seed applied automatically on first run), the web
+app, the Redpanda broker + Console, Ollama, and the `connect` pipeline. Open
+<http://localhost:8080> for the triage dashboard and <http://localhost:8090> for
+Redpanda Console. The dashboard fills with **live** classified edits once the
+pipeline is running (it shows the seeded rows in [`db/seed.sql`](db/seed.sql)
+until then).
+
+> **Memory / environment.** The full stack (broker + Console + Connect + DB + web
+> + Ollama) needs a Docker VM with **≥ 4 GB**. Docker Desktop defaults are fine
+> and are the reference environment; a tiny ~1.9 GB Colima VM will **OOM-kill**
+> redpanda (which is why redpanda is memory-capped in compose). On Apple Silicon,
+> run Ollama on the host (see Classification) — the containerized model can crash
+> under Colima.
 
 Health check:
 
@@ -36,13 +46,19 @@ page that auto-retries — the app never crashes on a cold or transient DB.
 ## Dashboard & API
 
 - `GET /` — HTML dashboard: a table of classified edits sorted by confidence
-  descending, with label-filter chips (`all/vandalism/substantive/trivia/unclear`)
-  and a 15-second auto-refresh. The page is rendered in plain Python (no
-  template engine); untrusted fields (title, comment, editor) are escaped with
-  `html.escape`, diff links are emitted only for `http(s)` URIs and carry
+  descending. A header stat line shows the total, the escalated count, and how
+  long ago the newest row was classified. Each row links to the **article page**
+  and the Wikipedia **diff** separately, shows the `#rev_id`, and a relative
+  "Classified" time so you can see rows arriving live. Label-filter chips
+  (`all/vandalism/substantive/trivia/unclear`) plus an **escalated** toggle
+  (combinable) narrow the table; 15-second auto-refresh. Rendered in plain Python
+  (no template engine); untrusted fields (title, comment, editor) are escaped
+  with `html.escape`, and links are emitted only for `http(s)` URIs with
   `rel="noopener noreferrer"`.
-- `GET /api/edits?label=<label>` — the same data as JSON, newest-highest-
-  confidence first. Omitting `label` (or `all`) returns everything. Each row:
+- `GET /api/edits?label=<label>&escalated=1` — the same data as JSON, newest-
+  highest-confidence first. `label` (one of `all|vandalism|substantive|trivia|
+  unclear`) and `escalated=1` both filter; omitting them returns everything.
+  Each row:
 
 ```json
 {
@@ -121,17 +137,17 @@ Key choices:
   event_ts`; `size_delta = length.new - length.old`; the epoch `timestamp` is
   formatted to an ISO-8601 string (TIMESTAMPTZ-safe), falling back to `meta.dt`.
 
-The pipeline currently sinks to **stdout** only; the topic + Postgres UPSERT
-sink arrives in Phase 7. Dedup is deferred to the Postgres `rev_id` UPSERT (an
-SSE stream rarely re-sends a `rev_id`; reconnect replays are absorbed by the
-UPSERT), so no in-pipeline cache is needed.
+Dedup is handled durably by the Postgres `rev_id` UPSERT (an SSE stream rarely
+re-sends a `rev_id`; reconnect replays are absorbed by the UPSERT), so no
+in-pipeline cache is needed. The sink is covered below.
 
 ## Classification (diff-enriched, two-pass)
 
 Each surviving edit is enriched with its **actual diff** and classified by a
 **local Ollama model** through Connect `branch`es (in
-[`connect/wikipedia.yaml`](connect/wikipedia.yaml)). The dashboard isn't wired to
-these results yet (that's the Phase 7 sink) — watch them on stdout:
+[`connect/wikipedia.yaml`](connect/wikipedia.yaml)). Results are persisted to
+Postgres (and streamed to a topic — see "Sink" below); watch them flow on stdout
+logs too:
 
 ```bash
 docker compose logs -f connect   # each line carries label + confidence + escalated
@@ -216,12 +232,62 @@ OLLAMA_ADDRESS=http://host.docker.internal:11434 docker compose up
   (inference is local); the only outbound calls are the public Wikipedia SSE feed
   and the read-only diff fetch (which sends just revision ids).
 
-## Develop / test
+## Sink: topics, Console & UPSERT
+
+Phase 7 replaces the temporary stdout with a `broker` fan-out (in
+[`connect/wikipedia.yaml`](connect/wikipedia.yaml)) to three destinations:
+
+- **`wiki.edits.classified`** — Redpanda topic, keyed by `rev_id`, `zstd`,
+  batched: the stream of classified edits. The topic is **compacted**, so it
+  keeps the last value per `rev_id` (matching the UPSERT's last-write-wins).
+- **Postgres `classified_edits`** via `sql_raw` **UPSERT**
+  (`INSERT ... ON CONFLICT (rev_id) DO UPDATE`) — the dashboard's source. A row
+  first written `unclear` on a cold-start/transient failure is corrected in
+  place by a later, more confident pass; re-processing a `rev_id` updates the
+  row instead of duplicating it. The SQL output is wrapped in `retry`, so a
+  transient Postgres outage is retried, not fatal.
+- **`model.audit`** — Redpanda topic, append-only, ~6h retention, `zstd`: one
+  record per edit with both passes' raw model I/O
+  (`{rev_id, model, ts, pass1{input, raw_response, label, confidence}, pass2|null}`)
+  for replay / prompt-eval / drift inspection. Captured from branch metadata; it
+  is *not* persisted to Postgres (a `model_calls` table sync is left for later).
+
+Browse the topics in **Console** at <http://localhost:8090>, or from the CLI:
 
 ```bash
-cd app
-pip install -r requirements.txt
-pytest
+docker compose exec redpanda rpk topic consume wiki.edits.classified --num 5
+docker compose exec redpanda rpk topic consume model.audit --num 2
+```
+
+- **Routing.** The brief's "route" requirement is met by the confidence `switch`
+  (routing ambiguous edits to the escalation pass) plus a single labeled topic
+  (the `label` field) — a deliberate choice over topic-per-label.
+- **Compression.** Producer-side `zstd` on the topic outputs (text JSON +
+  wikitext diffs compress well), paired with batching for a better ratio;
+  transparent to Console/consumers.
+
+Ports: dashboard `8080`, Console `8090`.
+
+## Develop / test
+
+A root [`Makefile`](Makefile) wraps the common workflow — run `make help` for the
+full list. Highlights:
+
+```bash
+make up            # docker compose up -d
+make logs-connect  # follow the pipeline
+make labels        # label distribution from the logs
+make escalations   # escalated:true vs false counts
+make diffs         # recent diff-fetch lines (rev_id + diff_chars)
+make topics        # list topics; make consume-classified / consume-audit
+make psql          # psql shell on Postgres
+make check         # ruff + yamllint + connect-lint + pytest (local CI)
+```
+
+Run the tests directly without Docker:
+
+```bash
+cd app && pip install -r requirements.txt && pytest    # or: make test
 ```
 
 Layout:
@@ -239,6 +305,7 @@ app/
   requirements.txt
 db/                  # init.sql (schema) + seed.sql
 connect/             # wikipedia.yaml (Redpanda Connect ingest pipeline)
+Makefile             # dev/test shortcuts (make help)
 ```
 
 ## Configuration

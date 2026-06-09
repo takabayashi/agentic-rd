@@ -73,6 +73,59 @@ services:
     command: ["ollama pull \"$$OLLAMA_MODEL\""]
     restart: "no"
 
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.15
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      # Cap memory so redpanda doesn't auto-grab the whole VM. dev-container
+      # tolerates a small footprint; the Docker VM still needs enough RAM for
+      # the full stack (Docker Desktop defaults are fine; ~1.9 GB Colima OOMs).
+      - --memory=1G
+      - --reserve-memory=0M
+      - --default-log-level=warn
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # Browse the topics at http://localhost:8090 (host 8090 -> container 8080).
+  console:
+    image: docker.redpanda.com/redpandadata/console:v3.7.4
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot: create topics with explicit configs before connect produces.
+  # classified = compacted (last-write-wins by rev_id, matches the UPSERT);
+  # model.audit = append-only with 6h retention (every call is a distinct event).
+  # `|| true` keeps it idempotent across restarts (topic already exists).
+  redpanda-topics:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.15
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        rpk topic create wiki.edits.classified -c cleanup.policy=compact -X brokers=redpanda:9092 || true;
+        rpk topic create model.audit -c cleanup.policy=delete -c retention.ms=21600000 -X brokers=redpanda:9092 || true
+    restart: "no"
+
   connect:
     image: docker.redpanda.com/redpandadata/connect:4.95.0
     command: run /connect/wikipedia.yaml
@@ -86,6 +139,9 @@ services:
       # Pass-1 results below this confidence (or labelled `unclear`) escalate to
       # a second, more rigorous classification pass. Lower it to escalate less.
       CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.7}
+      # Sink targets (Phase 7): Redpanda broker + the Postgres UPSERT DSN.
+      REDPANDA_BROKERS: redpanda:9092
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-wiki}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-wiki}?sslmode=disable
     # Lets the documented host-Ollama override resolve everywhere (set
     # OLLAMA_ADDRESS=http://host.docker.internal:11434 to use a host GPU).
     extra_hosts:
@@ -93,8 +149,13 @@ services:
     depends_on:
       ollama-pull:
         condition: service_completed_successfully
+      redpanda-topics:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   pgdata:
   ollama:
+  redpanda:

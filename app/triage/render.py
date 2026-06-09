@@ -8,6 +8,8 @@ through ``_esc`` (and diff links are only emitted for http(s) URIs).
 """
 
 import html
+from datetime import UTC, datetime
+from urllib.parse import quote
 
 from .models import EditView
 
@@ -55,6 +57,11 @@ _STYLE = """
     .editor { color: var(--muted); font-size: 0.8rem; }
     .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
     .ts { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .meta { margin-top: 3px; font-size: 0.72rem; color: var(--muted); }
+    .meta a { color: var(--trivia); text-decoration: none; }
+    .meta a:hover { text-decoration: underline; }
+    .meta .rev { font-variant-numeric: tabular-nums; }
+    .sub .stat { color: var(--text); font-weight: 600; }
 """
 
 _WARMUP_STYLE = """
@@ -78,16 +85,63 @@ def _esc(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
+def _relative_time(dt: datetime | None) -> str:
+    """Human "Ns/Nm/Nh/Nd ago" so freshness is visible at a glance."""
+
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    secs = max((datetime.now(UTC) - dt).total_seconds(), 0)
+    if secs < 60:
+        return f"{int(secs)}s ago"
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
+def _query(label: str, escalated: bool) -> str:
+    """Build a dashboard URL preserving both the label and escalated filters."""
+
+    params = []
+    if label and label != "all":
+        params.append("label=" + quote(label))
+    if escalated:
+        params.append("escalated=1")
+    return "/?" + "&".join(params) if params else "/"
+
+
+def _article_url(edit: EditView) -> str | None:
+    """The article page link, derived from the (validated http) diff uri so it
+    works for any wiki; the title is percent-encoded into the path."""
+
+    if not edit.uri.startswith(("http://", "https://")):
+        return None
+    base = edit.uri.split("/w/index.php")[0] or "https://en.wikipedia.org"
+    return base + "/wiki/" + quote(edit.title, safe="")
+
+
 def _title_cell(edit: EditView) -> str:
     title = _esc(edit.title)
     # Only link out for http(s) URIs — never emit an attacker-supplied
     # javascript:/data: scheme as an href.
-    if edit.uri.startswith(("http://", "https://")):
-        return (
-            f'<a class="title" href="{_esc(edit.uri)}" '
+    article = _article_url(edit)
+    if article:
+        head = (
+            f'<a class="title" href="{_esc(article)}" '
             f'target="_blank" rel="noopener noreferrer">{title}</a>'
         )
-    return f'<span class="title">{title}</span>'
+    else:
+        head = f'<span class="title">{title}</span>'
+    links = []
+    if edit.uri.startswith(("http://", "https://")):
+        links.append(
+            f'<a href="{_esc(edit.uri)}" target="_blank" rel="noopener noreferrer">diff</a>'
+        )
+    links.append(f'<span class="rev">#{edit.rev_id}</span>')
+    return f'{head}<div class="meta">{" · ".join(links)}</div>'
 
 
 def _row(edit: EditView) -> str:
@@ -106,13 +160,21 @@ def _row(edit: EditView) -> str:
           <td class="comment">{_esc(edit.comment)}</td>
           <td class="editor">{_esc(edit.editor)}</td>
           <td class="ts">{edit.event_ts.strftime("%Y-%m-%d %H:%M")}</td>
+          <td class="ts">{_esc(_relative_time(edit.classified_at))}</td>
         </tr>"""
 
 
-def _filter_chip(name: str, count: int, active: str) -> str:
-    href = "/" if name == "all" else f"/?label={_esc(name)}"
+def _filter_chip(name: str, count: int, active: str, escalated_active: bool) -> str:
+    href = _query(name, escalated_active)
     cls = "active" if name == active else ""
-    return f'<a href="{href}" class="{cls}">{_esc(name)}<span class="n">{count}</span></a>'
+    return f'<a href="{_esc(href)}" class="{cls}">{_esc(name)}<span class="n">{count}</span></a>'
+
+
+def _escalated_chip(count: int, active_label: str, escalated_active: bool) -> str:
+    # Toggles the escalated filter while preserving the current label.
+    href = _query(active_label, not escalated_active)
+    cls = "active" if escalated_active else ""
+    return f'<a href="{_esc(href)}" class="{cls}">escalated<span class="n">{count}</span></a>'
 
 
 def _table(edits: list[EditView]) -> str:
@@ -121,7 +183,7 @@ def _table(edits: list[EditView]) -> str:
       <thead>
         <tr>
           <th>Label</th><th>Conf.</th><th>Article</th><th>Δ bytes</th>
-          <th>Comment</th><th>Editor</th><th>Time (UTC)</th>
+          <th>Comment</th><th>Editor</th><th>Edited (UTC)</th><th>Classified</th>
         </tr>
       </thead>
       <tbody>
@@ -139,17 +201,32 @@ def _empty(active: str) -> str:
 
 
 def render_dashboard(
-    edits: list[EditView], filters: list[str], counts: dict[str, int], active: str
+    edits: list[EditView],
+    filters: list[str],
+    counts: dict[str, int],
+    active: str,
+    *,
+    escalated_active: bool = False,
+    escalated_count: int = 0,
+    newest_classified_at: datetime | None = None,
 ) -> str:
     title_suffix = f" · {_esc(active)}" if active != "all" else ""
-    chips = "\n      ".join(_filter_chip(f, counts.get(f, 0), active) for f in filters)
+    label_chips = "\n      ".join(
+        _filter_chip(f, counts.get(f, 0), active, escalated_active) for f in filters
+    )
+    chips = label_chips + "\n      " + _escalated_chip(escalated_count, active, escalated_active)
     body = _table(edits) if edits else _empty(active)
+    sub = (
+        f'<span class="stat">{counts.get("all", 0)}</span> classified · '
+        f'<span class="stat">{escalated_count}</span> escalated · '
+        f"newest {_esc(_relative_time(newest_classified_at))} · auto-refresh 15s"
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- Plain auto-refresh: re-requests the same URL (filter preserved) every 15s. -->
+  <!-- Plain auto-refresh: re-requests the same URL (filters preserved) every 15s. -->
   <meta http-equiv="refresh" content="15" />
   <title>Edit Triage{title_suffix}</title>
   <style>{_STYLE}</style>
@@ -157,7 +234,7 @@ def render_dashboard(
 <body>
   <header>
     <h1>Wikipedia Edit Triage</h1>
-    <p class="sub">{counts.get("all", 0)} classified edits · sorted by confidence · auto-refresh 15s</p>
+    <p class="sub">{sub}</p>
     <nav class="filters">
       {chips}
     </nav>

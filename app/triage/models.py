@@ -39,12 +39,16 @@ class EditView(BaseModel):
     classified_at: datetime
 
 
-def select_edits(edits: list[EditView], label: str | None = None) -> list[EditView]:
-    """Filter by label (``None`` or ``"all"`` means no filter) and sort by
-    confidence descending. Pure function so it is trivially testable and shared
-    by both the HTML view and the JSON API."""
+def select_edits(
+    edits: list[EditView], label: str | None = None, escalated_only: bool = False
+) -> list[EditView]:
+    """Filter by label (``None`` or ``"all"`` means no filter), optionally to
+    escalated-only, and sort by confidence descending. Pure function so it is
+    trivially testable and shared by both the HTML view and the JSON API."""
 
     selected = edits
     if label and label != "all":
-        selected = [e for e in edits if e.label.value == label]
+        selected = [e for e in selected if e.label.value == label]
+    if escalated_only:
+        selected = [e for e in selected if e.escalated]
     return sorted(selected, key=lambda e: e.confidence, reverse=True)
